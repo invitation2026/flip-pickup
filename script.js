@@ -23,6 +23,9 @@ let zxingCodeReader = null;
 let isScanning = false;
 let hiddenImei2 = '';
 let scanMode = 'barcode';
+let pendingFilter = 'all';
+let allPendingOrders = [];
+let pendingDoneOrderId = null; // order ID being done from pending
 
 // Tesseract worker & OCR scanning state
 let tesseractWorker = null;
@@ -31,6 +34,9 @@ let isOcrScanning = false;
 let ocrAttemptCount = 0;
 let lastDetectedImei = '';
 
+// ==========================================
+// REASONS — "On the way" added at TOP
+// ==========================================
 const rejectReasons = [
     { text: 'Customer wanted price only', icon: 'indian-rupee' },
     { text: 'Customer denied price drop', icon: 'trending-down' },
@@ -42,6 +48,7 @@ const rejectReasons = [
 ];
 
 const rescheduleReasons = [
+    { text: 'On the way', icon: 'map-pin' }, // ✅ added at TOP
     { text: 'Customer not picking call', icon: 'phone-missed' },
     { text: 'Wrong address / pin code', icon: 'map-pin-off' },
     { text: 'Customer asked for tomorrow', icon: 'calendar' },
@@ -55,7 +62,13 @@ const rescheduleReasons = [
 document.addEventListener('DOMContentLoaded', () => {
     lucide.createIcons();
     loadTodayStats();
+    loadPendingOrders();
     setupOfflineDetection();
+
+    // Real-time pending listener
+    db.ref('pending').on('value', (snap) => {
+        loadPendingOrders();
+    });
 });
 
 function setupOfflineDetection() {
@@ -64,11 +77,13 @@ function setupOfflineDetection() {
         document.getElementById('offlineBanner').classList.toggle('hidden', isOnline);
         const statusEl = document.getElementById('connectionStatus');
         if (isOnline) {
-            statusEl.className = 'flex items-center gap-1.5 px-2.5 py-1 bg-green-50 rounded-full';
+            statusEl.className =
+                'flex items-center gap-1.5 px-2.5 py-1 bg-green-50 rounded-full';
             statusEl.innerHTML =
                 '<div class="w-2 h-2 bg-green-500 rounded-full pulse-ring"></div><span class="text-xs font-medium text-green-700">Online</span>';
         } else {
-            statusEl.className = 'flex items-center gap-1.5 px-2.5 py-1 bg-red-50 rounded-full';
+            statusEl.className =
+                'flex items-center gap-1.5 px-2.5 py-1 bg-red-50 rounded-full';
             statusEl.innerHTML =
                 '<div class="w-2 h-2 bg-red-500 rounded-full"></div><span class="text-xs font-medium text-red-700">Offline</span>';
         }
@@ -78,6 +93,9 @@ function setupOfflineDetection() {
     updateStatus();
 }
 
+// ==========================================
+// LOAD TODAY STATS
+// ==========================================
 async function loadTodayStats() {
     try {
         const today = new Date().toDateString();
@@ -103,6 +121,145 @@ async function loadTodayStats() {
     }
 }
 
+// ==========================================
+// LOAD PENDING ORDERS
+// ==========================================
+async function loadPendingOrders() {
+    try {
+        const snapshot = await db.ref('pending').once('value');
+        const data = snapshot.val() || {};
+        allPendingOrders = [];
+
+        for (const [orderId, item] of Object.entries(data)) {
+            allPendingOrders.push({
+                orderId,
+                ...item
+            });
+        }
+
+        // Sort by timestamp (newest first)
+        allPendingOrders.sort((a, b) => {
+            return (b.timestamp || 0) - (a.timestamp || 0);
+        });
+
+        renderPendingList();
+        updatePendingCount();
+
+    } catch (e) {
+        console.log('Pending load error:', e);
+        document.getElementById('pendingList').innerHTML =
+            '<div class="pending-empty"><i data-lucide="alert-circle"></i><p class="text-sm font-medium text-red-500">Error loading pending</p></div>';
+        lucide.createIcons();
+    }
+}
+
+function updatePendingCount() {
+    const count = allPendingOrders.length;
+    document.getElementById('pendingCountBadge').textContent = count;
+    document.getElementById('pendingCountBadge').style.display = count > 0 ? 'inline-block' : 'none';
+}
+
+function setPendingFilter(filter) {
+    pendingFilter = filter;
+    document.querySelectorAll('#pendingTabBar button').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.filter === filter);
+    });
+    renderPendingList();
+}
+
+function renderPendingList() {
+    const container = document.getElementById('pendingList');
+    let filtered = [...allPendingOrders];
+
+    if (pendingFilter === 'onway') {
+        filtered = filtered.filter(item =>
+            item.reason && item.reason.toLowerCase().includes('on the way')
+        );
+    }
+
+    if (filtered.length === 0) {
+        const msg = pendingFilter === 'onway' ?
+            'No "On the way" orders' :
+            'No pending orders';
+        container.innerHTML = `
+            <div class="pending-empty">
+                <i data-lucide="inbox"></i>
+                <p class="text-sm font-medium">${msg}</p>
+                <p class="text-xs text-gray-400 mt-1">Orders you reschedule will appear here</p>
+            </div>
+        `;
+        lucide.createIcons();
+        return;
+    }
+
+    let html = '';
+    filtered.forEach(item => {
+        const isOnWay = item.reason && item.reason.toLowerCase().includes('on the way');
+        const badge = isOnWay ?
+            '<span class="badge-onway">🚗 On the way</span>' :
+            '<span class="badge-pending">⏳ Pending</span>';
+        const time = item.timestampIST || item.timestamp || '';
+        const reason = item.reason || '—';
+
+        html += `
+            <div class="pending-item glass rounded-xl p-4 mb-3 shadow">
+                <div class="flex items-start justify-between">
+                    <div class="flex-1 min-w-0">
+                        <div class="flex items-center gap-2 flex-wrap">
+                            <span class="font-mono font-bold text-gray-800 text-sm">${item.orderId}</span>
+                            ${badge}
+                        </div>
+                        <p class="text-xs text-gray-500 mt-1 flex items-center gap-1">
+                            <i data-lucide="message-circle" class="w-3 h-3"></i>
+                            ${reason}
+                        </p>
+                        <p class="text-xs text-gray-400 mt-0.5 flex items-center gap-1">
+                            <i data-lucide="clock" class="w-3 h-3"></i>
+                            ${time}
+                        </p>
+                    </div>
+                    <button onclick="markPendingDone('${item.orderId}')" class="done-btn flex-shrink-0 ml-3">
+                        <i data-lucide="check-circle"></i> Done
+                    </button>
+                </div>
+            </div>
+        `;
+    });
+
+    container.innerHTML = html;
+    lucide.createIcons();
+}
+
+// ==========================================
+// MARK PENDING AS DONE → Open pickup form
+// ==========================================
+function markPendingDone(orderId) {
+    pendingDoneOrderId = orderId;
+    // Set the order ID in the input field
+    document.getElementById('orderId').value = orderId;
+    // Open pickup form
+    showForm('pickup');
+    // Show a toast
+    showToast(`📦 Pending order ${orderId} — fill pickup details`, 'info');
+}
+
+// ==========================================
+// DELETE PENDING ENTRY
+// ==========================================
+async function deletePending(orderId) {
+    try {
+        await db.ref('pending/' + orderId).remove();
+        console.log('✅ Pending deleted:', orderId);
+        // Refresh pending list
+        await loadPendingOrders();
+    } catch (e) {
+        console.error('Delete pending error:', e);
+    }
+}
+
+// ==========================================
+// PASTE ORDER ID
+// ==========================================
 async function pasteOrderId() {
     try {
         const text = await navigator.clipboard.readText();
@@ -117,7 +274,14 @@ async function pasteOrderId() {
 // NAVIGATION
 // ==========================================
 function showForm(status) {
-    const orderId = document.getElementById('orderId').value.trim().toUpperCase();
+    let orderId = document.getElementById('orderId').value.trim().toUpperCase();
+
+    // If coming from pending "Done", orderId is already set
+    if (!orderId && pendingDoneOrderId) {
+        orderId = pendingDoneOrderId;
+        document.getElementById('orderId').value = orderId;
+    }
+
     if (!orderId) {
         Swal.fire({
             icon: 'warning',
@@ -129,6 +293,9 @@ function showForm(status) {
         document.getElementById('orderId').focus();
         return;
     }
+
+    // Clear the pendingDoneOrderId after use
+    pendingDoneOrderId = null;
 
     currentStatus = status;
     selectedReason = '';
@@ -169,7 +336,7 @@ function showForm(status) {
                     </button>
                 </div>
                 <p class="text-xs text-gray-400 mt-1.5 flex items-center gap-1">
-                    <span>📱</span> 
+                    <span>📱</span>
                     <span>Barcode scan karo ya <strong>*#06#</strong> screen — Capture dabao, fatafat ho jaega!</span>
                 </p>
             </div>
@@ -191,8 +358,9 @@ function showForm(status) {
         const reasons = (status === 'rejected') ? rejectReasons : rescheduleReasons;
         const isReject = status === 'rejected';
 
-        formTitle.innerText = isReject ? "Rejection Reason" : "Reschedule Reason";
-        formSubtitle.innerText = "Select the most appropriate reason";
+        formTitle.innerText = isReject ? "Rejection Reason" : "Reschedule / Pending";
+        formSubtitle.innerText = isReject ? "Select the most appropriate reason" :
+            "Select reason — 'On the way' means you're heading there";
         formIcon.className =
             `w-12 h-12 rounded-xl flex items-center justify-center bg-gradient-to-br ${isReject ? 'from-red-500 to-rose-600' : 'from-amber-500 to-orange-600'}`;
         formIcon.innerHTML =
@@ -215,6 +383,14 @@ function showForm(status) {
         reasonsHtml +=
             '<input type="text" id="otherReason" placeholder="Type your reason here..." class="input-field w-full p-3.5 rounded-xl outline-none hidden mt-3">';
         formFields.innerHTML = reasonsHtml;
+
+        // Auto-select "On the way" if it exists
+        setTimeout(() => {
+            const firstBtn = document.querySelector('.reason-btn');
+            if (firstBtn) {
+                selectReason(firstBtn, firstBtn.dataset.reason);
+            }
+        }, 100);
     }
 
     lucide.createIcons();
@@ -224,6 +400,7 @@ function showForm(status) {
 function goBack() {
     document.getElementById('step-order').classList.remove('hidden');
     document.getElementById('step-form').classList.add('hidden');
+    pendingDoneOrderId = null;
 }
 
 function selectReason(btn, reason) {
@@ -316,12 +493,10 @@ async function startScanner() {
     spinner.style.display = 'inline-block';
     lucide.createIcons();
 
-    // Reset UI
     document.getElementById('imeiResult').classList.remove('show');
     document.getElementById('ocrProgress').style.display = 'none';
     document.getElementById('ocrProgressBar').style.width = '0%';
 
-    // Init Tesseract for OCR mode
     if (scanMode === 'ocr') {
         tesseractWorker = await initTesseract();
     }
@@ -384,10 +559,10 @@ async function startScanner() {
         );
 
         isScanning = true;
-        statusText.textContent = scanMode === 'barcode' ? '🎯 Scanning barcode...' : '📱 Ready — tap Capture';
+        statusText.textContent = scanMode === 'barcode' ? '🎯 Scanning barcode...' :
+            '📱 Ready — tap Capture';
         spinner.style.display = 'none';
 
-        // Show capture button for OCR mode
         if (scanMode === 'ocr') {
             document.getElementById('captureBtn').style.display = 'flex';
             document.getElementById('captureBtn').disabled = false;
@@ -398,7 +573,6 @@ async function startScanner() {
             document.getElementById('captureBtn').style.display = 'none';
         }
 
-        // Update tip based on mode
         const tip = document.getElementById('scanTip');
         if (scanMode === 'barcode') {
             tip.innerHTML =
@@ -412,19 +586,21 @@ async function startScanner() {
         console.error('Scanner error:', err);
         stopScanner();
         let msg = 'Camera access failed';
-        if (err.name === 'NotAllowedError') msg = 'Please allow camera permission in browser settings';
+        if (err.name === 'NotAllowedError') msg =
+        'Please allow camera permission in browser settings';
         else if (err.name === 'NotFoundError') msg = 'No camera found on this device';
         else if (err.name === 'NotSecureError' || window.location.protocol === 'file:') {
             msg = 'Camera needs HTTPS. Host this page online (Netlify/Vercel).';
         } else if (err.message && err.message.includes('ZXing')) {
             msg = 'Scanner library failed to load. Check internet.';
         }
-        Swal.fire({ icon: 'error', title: 'Camera Error', text: msg, confirmButtonColor: '#3b82f6' });
+        Swal.fire({ icon: 'error', title: 'Camera Error', text: msg,
+        confirmButtonColor: '#3b82f6' });
     }
 }
 
 // ==========================================
-// START OCR SCANNING — Instant capture + background scan
+// START OCR SCANNING
 // ==========================================
 async function startOCRScanning() {
     if (scanMode !== 'ocr') return;
@@ -433,7 +609,6 @@ async function startOCRScanning() {
         return;
     }
 
-    // Make sure Tesseract is ready
     if (!tesseractWorker) {
         showToast('⏳ Initializing OCR...', 'info');
         tesseractWorker = await initTesseract();
@@ -449,14 +624,14 @@ async function startOCRScanning() {
         return;
     }
 
-    // Reset state
     isOcrScanning = true;
     lastDetectedImei = '';
     ocrAttemptCount = 0;
 
     const captureBtn = document.getElementById('captureBtn');
     captureBtn.disabled = true;
-    captureBtn.innerHTML = '<span class="spinner" style="width:20px;height:20px;border-width:2px;"></span> Scanning...';
+    captureBtn.innerHTML =
+        '<span class="spinner" style="width:20px;height:20px;border-width:2px;"></span> Scanning...';
 
     const statusText = document.getElementById('scanStatusText');
     const progress = document.getElementById('ocrProgress');
@@ -466,7 +641,7 @@ async function startOCRScanning() {
 
     statusText.textContent = '📸 Capturing & scanning...';
 
-    // ---- 1. IMMEDIATE CAPTURE (turant photo click) ----
+    // Immediate capture
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
     const maxW = 800;
@@ -480,7 +655,6 @@ async function startOCRScanning() {
     ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(video, 0, 0, w, h);
 
-    // Preprocess
     const imgData = ctx.getImageData(0, 0, w, h);
     const d = imgData.data;
     for (let i = 0; i < d.length; i += 4) {
@@ -496,7 +670,6 @@ async function startOCRScanning() {
         console.log('🔍 Immediate OCR result:', text);
         const imeis = extractIMEIs(text);
         if (imeis.imei1 && imeis.imei1.length >= 14) {
-            // Found immediately
             handleImeiFound(imeis.imei1, imeis.imei2);
             return;
         }
@@ -504,7 +677,7 @@ async function startOCRScanning() {
         console.error('Immediate OCR error:', e);
     }
 
-    // ---- 2. If not found, start background scanning ----
+    // Background scanning
     statusText.textContent = '🔍 Scanning in background...';
     progressBar.style.width = '0%';
     ocrAttemptCount = 0;
@@ -523,7 +696,6 @@ async function startOCRScanning() {
 
         ocrAttemptCount++;
 
-        // Capture frame
         const c2 = document.createElement('canvas');
         const ctx2 = c2.getContext('2d');
         const maxW2 = 640;
@@ -537,7 +709,6 @@ async function startOCRScanning() {
         ctx2.imageSmoothingQuality = 'high';
         ctx2.drawImage(video, 0, 0, w2, h2);
 
-        // Preprocess
         const imgData2 = ctx2.getImageData(0, 0, w2, h2);
         const d2 = imgData2.data;
         for (let i = 0; i < d2.length; i += 4) {
@@ -569,21 +740,18 @@ async function startOCRScanning() {
 // HANDLE IMEI FOUND
 // ==========================================
 function handleImeiFound(imei1, imei2) {
-    if (!isOcrScanning && !isScanning) return; // already stopped
+    if (!isOcrScanning && !isScanning) return;
 
-    // Avoid duplicate
     if (imei1 === lastDetectedImei) return;
     lastDetectedImei = imei1;
 
     console.log('✅ IMEI detected:', imei1);
 
-    // Show result
     const resultEl = document.getElementById('imeiResult');
     const resultText = document.getElementById('imeiResultText');
     resultText.textContent = '✅ IMEI: ' + imei1 + (imei2 ? ' | IMEI2 captured' : '');
     resultEl.classList.add('show');
 
-    // Fill input
     const imeiInput = document.getElementById('imei');
     if (imeiInput) {
         imeiInput.value = imei1;
@@ -601,7 +769,6 @@ function handleImeiFound(imei1, imei2) {
     document.getElementById('scanStatusText').textContent = '✅ IMEI captured!';
     showToast('✅ IMEI: ' + imei1, 'success');
 
-    // Stop everything
     stopOCRScanning();
     setTimeout(() => stopScanner(), 800);
 }
@@ -626,20 +793,15 @@ function stopOCRScanning() {
 }
 
 // ==========================================
-// ✅ IMEI LUHN VALIDATION (Real IMEI check)
+// IMEI LUHN VALIDATION
 // ==========================================
 function isValidIMEI(imei) {
     if (!imei || imei.length !== 15) return false;
     if (!/^\d{15}$/.test(imei)) return false;
-    
-    // IMEI must start with valid TAC (3-9)
     if (!/^[3-9]/.test(imei)) return false;
-    
-    // Luhn algorithm check
     let sum = 0;
     for (let i = 0; i < 15; i++) {
         let digit = parseInt(imei[i]);
-        // Double every second digit from right (index 1, 3, 5, 7, 9, 11, 13)
         if (i % 2 === 1) {
             digit *= 2;
             if (digit > 9) digit -= 9;
@@ -650,15 +812,15 @@ function isValidIMEI(imei) {
 }
 
 // ==========================================
-// ✅ EXTRACT IMEI — FIXED (with Luhn validation)
+// EXTRACT IMEI
 // ==========================================
 function extractIMEIs(text) {
     console.log('🔍 Extracting IMEI from:', text);
 
-    let imei1 = null, imei2 = null;
-    const candidates = []; // Store all potential IMEIs
+    let imei1 = null,
+        imei2 = null;
+    const candidates = [];
 
-    // Step 1: Normalize text (but keep IMEI word intact)
     let clean = text
         .replace(/[Oo]/g, '0')
         .replace(/[Ss]/g, '5')
@@ -672,13 +834,9 @@ function extractIMEIs(text) {
 
     console.log('🧹 Cleaned:', clean);
 
-    // Step 2: Extract ALL 15-digit number sequences
     const all15Digits = clean.match(/\d{15}/g) || [];
-    
-    // Also try 14-digit (some OCR miss last digit)
     const all14Digits = clean.match(/\d{14}/g) || [];
 
-    // Step 3: Check each candidate with Luhn validation
     for (let num of all15Digits) {
         if (/^[3-9]/.test(num) && isValidIMEI(num)) {
             candidates.push(num);
@@ -686,7 +844,6 @@ function extractIMEIs(text) {
         }
     }
 
-    // Step 4: Try to find IMEI near "IMEI" keyword (highest priority)
     const imeiPatterns = [
         /IMEI\s*1\s*[:\-]?\s*(\d{15})/i,
         /IMEI\s*[:\-]?\s*(\d{15})/i,
@@ -710,13 +867,11 @@ function extractIMEIs(text) {
         }
     }
 
-    // Step 5: If keyword search didn't work, use Luhn-validated candidates
     if (!imei1 && candidates.length > 0) {
         imei1 = candidates[0];
         console.log('✅ IMEI1 from candidates:', imei1);
     }
     if (!imei2 && candidates.length > 1) {
-        // Find a different IMEI
         for (let c of candidates) {
             if (c !== imei1) {
                 imei2 = c;
@@ -726,12 +881,9 @@ function extractIMEIs(text) {
         }
     }
 
-    // Step 6: Try 14-digit numbers (pad with check digit if valid)
     if (!imei1 && all14Digits.length > 0) {
         for (let num of all14Digits) {
             if (!/^[3-9]/.test(num)) continue;
-            
-            // Try all possible check digits (0-9)
             for (let check = 0; check <= 9; check++) {
                 const candidate = num + check;
                 if (isValidIMEI(candidate)) {
@@ -749,10 +901,6 @@ function extractIMEIs(text) {
         }
     }
 
-    // Step 7: REJECT phone numbers (10 digits) and other invalid numbers
-    // This is automatic because we only accept 15-digit Luhn-valid numbers
-
-    // Final validation
     if (imei1 && !isValidIMEI(imei1)) {
         console.log('❌ IMEI1 failed Luhn check, rejecting:', imei1);
         imei1 = null;
@@ -765,8 +913,9 @@ function extractIMEIs(text) {
     console.log('📱 Final IMEI1:', imei1, '| IMEI2:', imei2);
     return { imei1, imei2 };
 }
+
 // ==========================================
-// ON SCAN SUCCESS — for barcode mode
+// ON SCAN SUCCESS
 // ==========================================
 function onScanSuccess(imei1, imei2) {
     if (!isScanning) return;
@@ -845,20 +994,16 @@ function showToast(message, type = 'info') {
 }
 
 // ==========================================
-// ✅ HELPER: Get exact IST date/time in readable format
+// GET IST DATE/TIME
 // ==========================================
 function getISTDateTime() {
     const now = new Date();
-    // IST = UTC + 5:30
     const istOffset = 5.5 * 60 * 60 * 1000;
     const istTime = new Date(now.getTime() + istOffset);
-    
-    // Format: DD-MMM-YYYY, hh:mm:ss AM/PM IST
-    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     const dd = String(istTime.getUTCDate()).padStart(2, '0');
     const mmm = months[istTime.getUTCMonth()];
     const yyyy = istTime.getUTCFullYear();
-    
     let hours = istTime.getUTCHours();
     const minutes = String(istTime.getUTCMinutes()).padStart(2, '0');
     const seconds = String(istTime.getUTCSeconds()).padStart(2, '0');
@@ -866,27 +1011,24 @@ function getISTDateTime() {
     hours = hours % 12;
     hours = hours ? hours : 12;
     const hh = String(hours).padStart(2, '0');
-    
     return `${dd}-${mmm}-${yyyy}, ${hh}:${minutes}:${seconds} ${ampm} IST`;
 }
 
 // ==========================================
-// ✅ SUBMIT DATA — WhatsApp message simplified (NO TIME)
+// SUBMIT DATA
 // ==========================================
 async function submitData() {
     const orderId = document.getElementById('orderId').value.trim().toUpperCase();
     const now = new Date();
-
-    // ✅ Firebase me exact IST time save hoga (2 formats)
     const istDateTime = getISTDateTime();
-    
+
     let dbData = {
         orderId,
         status: currentStatus,
-        timestamp: now.toISOString(),      // UTC ISO (sorting ke liye)
-        timestampIST: istDateTime,         // Readable IST format (display ke liye)
-        date: now.toLocaleDateString('en-IN'),  // e.g., 5/7/2026
-        time: now.toLocaleTimeString('en-IN')   // e.g., 2:45:30 PM
+        timestamp: now.toISOString(),
+        timestampIST: istDateTime,
+        date: now.toLocaleDateString('en-IN'),
+        time: now.toLocaleTimeString('en-IN')
     };
 
     let whatsappMsg = '';
@@ -907,14 +1049,12 @@ async function submitData() {
             return;
         }
 
-        // ✅ Firebase me sab save hoga (time included)
         dbData.phoneModel = phoneModel;
         dbData.imei = imei;
         if (hiddenImei2) dbData.imei2 = hiddenImei2;
         dbData.value = parseInt(value);
         dbData.customerName = custName || 'N/A';
 
-        // ✅ WhatsApp me sirf Order ID + Status (NO TIME)
         whatsappMsg = `Order ID: ${orderId}\nStatus: Pickup Completed`;
 
     } else {
@@ -943,12 +1083,10 @@ async function submitData() {
 
         dbData.reason = reason;
 
-        // ✅ WhatsApp format exactly as requested
         if (currentStatus === 'rejected') {
-            // Rejected: Order ID + Status + Reason
             whatsappMsg = `Order ID: ${orderId}\nStatus: Rejected\nReason: ${reason}`;
         } else {
-            // Reschedule/Pending: Order ID + Reason (only)
+            // Reschedule / Pending — save to pending
             whatsappMsg = `Order ID: ${orderId}\nReason: ${reason}`;
         }
     }
@@ -961,8 +1099,30 @@ async function submitData() {
     });
 
     try {
-        // ✅ Firebase me save (with full timestamp)
+        // Save to pickups
         await db.ref('pickups/' + orderId).set(dbData);
+
+        // ✅ If this was a pending order, DELETE it from pending
+        const pendingSnap = await db.ref('pending/' + orderId).once('value');
+        if (pendingSnap.exists()) {
+            await db.ref('pending/' + orderId).remove();
+            console.log('🗑️ Pending deleted after pickup:', orderId);
+            // Refresh pending list
+            await loadPendingOrders();
+        }
+
+        // For reschedule: save to pending (only if not pickup and not rejected)
+        if (currentStatus === 'reschedule') {
+            const pendingData = {
+                orderId,
+                reason: dbData.reason || selectedReason,
+                status: 'reschedule',
+                timestamp: now.toISOString(),
+                timestampIST: istDateTime,
+            };
+            await db.ref('pending/' + orderId).set(pendingData);
+            console.log('📌 Saved to pending:', orderId);
+        }
 
         const result = await Swal.fire({
             icon: 'success',
@@ -1005,6 +1165,7 @@ async function submitData() {
         hiddenImei2 = '';
         goBack();
         loadTodayStats();
+        loadPendingOrders();
 
     } catch (error) {
         Swal.fire({
