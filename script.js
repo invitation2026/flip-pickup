@@ -1015,10 +1015,35 @@ function getISTDateTime() {
 }
 
 // ==========================================
-// SUBMIT DATA
+// SUBMIT DATA — with duplicate prevention
 // ==========================================
 async function submitData() {
     const orderId = document.getElementById('orderId').value.trim().toUpperCase();
+
+    // 🔥 DUPLICATE CHECK: prevent saving if order already exists in 'pickups'
+    try {
+        const existingSnap = await db.ref('pickups/' + orderId).once('value');
+        if (existingSnap.exists()) {
+            Swal.fire({
+                icon: 'error',
+                title: 'Duplicate Order ID',
+                text: `Order ID "${orderId}" already exists in the system. Use Admin panel to update.`,
+                confirmButtonColor: '#3b82f6'
+            });
+            return;
+        }
+    } catch (e) {
+        console.error('Duplicate check error:', e);
+        // If error, we still proceed? Safer to stop.
+        Swal.fire({
+            icon: 'error',
+            title: 'Check Failed',
+            text: 'Could not verify order ID. Please try again.',
+            confirmButtonColor: '#3b82f6'
+        });
+        return;
+    }
+
     const now = new Date();
     const istDateTime = getISTDateTime();
 
