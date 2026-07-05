@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="theme-color" content="#1e3a8a" />
+    <title>Flipkart Pickup Agent</title>
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+
+    <!-- ZXing for barcode -->
+    <script src="https://unpkg.com/@zxing/library@0.21.0/umd/index.min.js"></script>
+
+    <!-- Tesseract.js for OCR -->
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <style>
+        * {
+            -webkit-tap-highlight-color: transparent;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            overscroll-behavior: none;
+        }
+        .glass {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+        }
+        .btn-bounce:active {
+            transform: scale(0.96);
+        }
+        .btn-bounce {
+            transition: transform 0.15s ease;
+        }
+
+        .fade-in {
+            animation: fadeIn 0.3s ease-in;
+        }
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .slide-up {
+            animation: slideUp 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        @keyframes slideUp {
+            from {
+                transform: translateY(100%);
+            }
+            to {
+                transform: translateY(0);
+            }
+        }
+
+        .pulse-ring {
+            animation: pulseRing 2s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
+        }
+        @keyframes pulseRing {
+            0% {
+                box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7);
+            }
+            70% {
+                box-shadow: 0 0 0 15px rgba(34, 197, 94, 0);
+            }
+            100% {
+                box-shadow: 0 0 0 0 rgba(34, 197, 94, 0);
+            }
+        }
+
+        .status-card {
+            transition: all 0.2s;
+            position: relative;
+            overflow: hidden;
+        }
+        .status-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.2) 0%, transparent 100%);
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        .status-card:active::before {
+            opacity: 1;
+        }
+
+        .reason-btn {
+            transition: all 0.2s;
+            border: 2px solid #e5e7eb;
+        }
+        .reason-btn.active {
+            background: linear-gradient(135deg, #3b82f6, #2563eb);
+            color: white;
+            border-color: #2563eb;
+            transform: scale(1.02);
+        }
+        .reason-btn.active i {
+            color: white !important;
+        }
+        .reason-btn.active .icon-wrap {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        .input-field {
+            transition: all 0.2s;
+            border: 2px solid #e5e7eb;
+            background: #fafafa;
+        }
+        .input-field:focus {
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+            background: #fff;
+        }
+
+        .scanner-overlay {
+            backdrop-filter: blur(8px);
+            background: rgba(0, 0, 0, 0.92);
+        }
+
+        .scan-frame {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 4/3;
+            background: #000;
+            border-radius: 12px;
+            overflow: hidden;
+        }
+        .scan-frame video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .scan-overlay {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            pointer-events: none;
+        }
+        .scan-box {
+            width: 85%;
+            height: 40%;
+            border: 3px solid #3b82f6;
+            border-radius: 12px;
+            position: relative;
+            box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.3);
+        }
+        .scan-box::before {
+            content: '';
+            position: absolute;
+            left: 5%;
+            right: 5%;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, #10b981, transparent);
+            animation: scanLine 1.8s ease-in-out infinite;
+            box-shadow: 0 0 10px #10b981;
+        }
+        @keyframes scanLine {
+            0%,
+            100% {
+                top: 10%;
+            }
+            50% {
+                top: 90%;
+            }
+        }
+        .corner {
+            position: absolute;
+            width: 24px;
+            height: 24px;
+            border: 4px solid #10b981;
+        }
+        .corner.tl {
+            top: -2px;
+            left: -2px;
+            border-right: none;
+            border-bottom: none;
+            border-top-left-radius: 12px;
+        }
+        .corner.tr {
+            top: -2px;
+            right: -2px;
+            border-left: none;
+            border-bottom: none;
+            border-top-right-radius: 12px;
+        }
+        .corner.bl {
+            bottom: -2px;
+            left: -2px;
+            border-right: none;
+            border-top: none;
+            border-bottom-left-radius: 12px;
+        }
+        .corner.br {
+            bottom: -2px;
+            right: -2px;
+            border-left: none;
+            border-top: none;
+            border-bottom-right-radius: 12px;
+        }
+
+        .scan-hint {
+            position: absolute;
+            bottom: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.75);
+            color: white;
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 500;
+            white-space: nowrap;
+            pointer-events: none;
+        }
+
+        ::-webkit-scrollbar {
+            display: none;
+        }
+        .no-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+
+        .flash-green {
+            animation: flashGreen 0.5s ease;
+        }
+        @keyframes flashGreen {
+            0%,
+            100% {
+                background: #fafafa;
+            }
+            50% {
+                background: #bbf7d0;
+            }
+        }
+
+        .spinner {
+            border: 3px solid #e5e7eb;
+            border-top: 3px solid #3b82f6;
+            border-radius: 50%;
+            width: 28px;
+            height: 28px;
+            animation: spin 0.8s linear infinite;
+            display: inline-block;
+        }
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+
+        .btn-scan-imei {
+            background: #1e40af;
+            color: white;
+            font-weight: 600;
+            padding: 8px 16px;
+            border-radius: 10px;
+            font-size: 13px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            border: none;
+            cursor: pointer;
+            transition: all 0.2s;
+            box-shadow: 0 2px 8px rgba(30, 64, 175, 0.3);
+        }
+        .btn-scan-imei:active {
+            transform: scale(0.95);
+        }
+        .btn-scan-imei i {
+            width: 18px;
+            height: 18px;
+        }
+
+        .mode-toggle {
+            display: flex;
+            gap: 6px;
+            background: #f1f5f9;
+            border-radius: 10px;
+            padding: 4px;
+            margin-bottom: 12px;
+        }
+        .mode-toggle button {
+            flex: 1;
+            padding: 6px 12px;
+            border-radius: 8px;
+            font-size: 12px;
+            font-weight: 600;
+            border: none;
+            cursor: pointer;
+            transition: all 0.2s;
+            background: transparent;
+            color: #64748b;
+        }
+        .mode-toggle button.active {
+            background: #fff;
+            color: #1e293b;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+        }
+        .mode-toggle button:active {
+            transform: scale(0.96);
+        }
+
+        .btn-capture {
+            background: linear-gradient(135deg, #10b981, #059669);
+            color: white;
+            border: none;
+            padding: 12px 28px;
+            border-radius: 50px;
+            font-size: 16px;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            width: 100%;
+            cursor: pointer;
+            transition: all 0.2s;
+            box-shadow: 0 4px 20px rgba(16, 185, 129, 0.4);
+            margin-top: 8px;
+        }
+        .btn-capture:active {
+            transform: scale(0.95);
+        }
+        .btn-capture:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+        .btn-capture i {
+            width: 20px;
+            height: 20px;
+        }
+
+        .btn-capture-secondary {
+            background: #e2e8f0;
+            color: #1e293b;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 50px;
+            font-size: 14px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+            width: 100%;
+        }
+        .btn-capture-secondary:active {
+            transform: scale(0.95);
+        }
+
+        .ocr-progress {
+            height: 4px;
+            background: #e2e8f0;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 8px;
+        }
+        .ocr-progress .bar {
+            height: 100%;
+            background: linear-gradient(90deg, #3b82f6, #10b981);
+            width: 0%;
+            border-radius: 4px;
+            transition: width 0.3s;
+        }
+
+        .imei-result {
+            background: #f0fdf4;
+            border: 2px solid #86efac;
+            border-radius: 10px;
+            padding: 8px 12px;
+            margin-top: 8px;
+            font-size: 13px;
+            font-weight: 600;
+            color: #065f46;
+            display: none;
+            text-align: center;
+            word-break: break-all;
+        }
+        .imei-result.show {
+            display: block;
+            animation: fadeIn 0.3s ease;
+        }
+    </style>
+</head>
+<body class="no-scrollbar">
+
+    <!-- Offline Banner -->
+    <div id="offlineBanner" class="bg-red-500 text-white text-center py-2 text-sm font-semibold hidden">
+        📡 Offline - Data will sync when back online
+    </div>
+
+    <!-- Main Container -->
+    <div class="max-w-md mx-auto min-h-screen pb-8">
+
+        <!-- Header -->
+        <div class="glass sticky top-0 z-40 px-5 py-4 shadow-lg">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 bg-gradient-to-br from-blue-600 to-purple-600 rounded-xl flex items-center justify-center shadow-lg">
+                        <i data-lucide="package" class="w-6 h-6 text-white"></i>
+                    </div>
+                    <div>
+                        <h1 class="text-lg font-bold text-gray-800">Flipkart Pickup</h1>
+                        <p class="text-xs text-gray-500">Agent Portal</p>
+                    </div>
+                </div>
+                <div id="connectionStatus" class="flex items-center gap-1.5 px-2.5 py-1 bg-green-50 rounded-full">
+                    <div class="w-2 h-2 bg-green-500 rounded-full pulse-ring"></div>
+                    <span class="text-xs font-medium text-green-700">Online</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Content Area -->
+        <div class="px-4 py-5">
+
+            <!-- STEP 1: Order ID + Status Selection -->
+            <div id="step-order" class="space-y-4 fade-in">
+
+                <!-- Order ID Card -->
+                <div class="glass rounded-2xl p-5 shadow-xl">
+                    <label class="flex items-center gap-2 text-sm font-bold text-gray-700 mb-3">
+                        <i data-lucide="hash" class="w-4 h-4 text-blue-600"></i>
+                        ORDER ID
+                    </label>
+                    <div class="relative">
+                        <input type="text" id="orderId" placeholder="SBMR3B0Q2P85FE91"
+                        class="input-field w-full p-4 rounded-xl text-lg font-mono uppercase outline-none"
+                        autocomplete="off" autocapitalize="characters" />
+                        <button onclick="pasteOrderId()" class="absolute right-2 top-1/2 -translate-y-1/2 p-2 text-gray-400 hover:text-blue-600">
+                            <i data-lucide="clipboard-paste" class="w-5 h-5"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Status Selection -->
+                <div class="glass rounded-2xl p-5 shadow-xl">
+                    <label class="flex items-center gap-2 text-sm font-bold text-gray-700 mb-3">
+                        <i data-lucide="list-checks" class="w-4 h-4 text-blue-600"></i>
+                        SELECT STATUS
+                    </label>
+
+                    <div class="space-y-3">
+                        <button onclick="showForm('pickup')" class="status-card btn-bounce w-full bg-gradient-to-r from-green-500 to-emerald-600 text-white p-5 rounded-2xl font-bold text-lg shadow-lg flex items-center justify-between">
+                            <div class="flex items-center gap-3">
+                                <div class="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center">
+                                    <i data-lucide="check-circle-2" class="w-6 h-6"></i>
+                                </div>
+                                <span>Pickup Completed</span>
+                            </div>
+                            <i data-lucide="chevron-right" class="w-5 h-5"></i>
+                        </button>
+
+                        <button onclick="showForm('rejected')" class="status-card btn-bounce w-full bg-gradient-to-r from-red-500 to-rose-600 text-white p-5 rounded-2xl font-bold text-lg shadow-lg flex items-center justify-between">
+                            <div class="flex items-center gap-3">
+                                <div class="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center">
+                                    <i data-lucide="x-circle" class="w-6 h-6"></i>
+                                </div>
+                                <span>Rejected</span>
+                            </div>
+                            <i data-lucide="chevron-right" class="w-5 h-5"></i>
+                        </button>
+
+                        <button onclick="showForm('reschedule')" class="status-card btn-bounce w-full bg-gradient-to-r from-amber-500 to-orange-600 text-white p-5 rounded-2xl font-bold text-lg shadow-lg flex items-center justify-between">
+                            <div class="flex items-center gap-3">
+                                <div class="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center">
+                                    <i data-lucide="clock" class="w-6 h-6"></i>
+                                </div>
+                                <span>Reschedule / Failed</span>
+                            </div>
+                            <i data-lucide="chevron-right" class="w-5 h-5"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Today's Stats -->
+                <div class="glass rounded-2xl p-5 shadow-xl">
+                    <div class="flex items-center justify-between mb-3">
+                        <h3 class="text-sm font-bold text-gray-700 flex items-center gap-2">
+                            <i data-lucide="bar-chart-3" class="w-4 h-4 text-blue-600"></i>
+                            TODAY'S STATS
+                        </h3>
+                        <button onclick="loadTodayStats()" class="text-xs text-blue-600 font-semibold flex items-center gap-1">
+                            <i data-lucide="refresh-cw" class="w-3 h-3"></i>
+                            Refresh
+                        </button>
+                    </div>
+                    <div class="grid grid-cols-3 gap-2">
+                        <div class="bg-green-50 rounded-xl p-3 text-center">
+                            <div id="statPickup" class="text-2xl font-bold text-green-600">0</div>
+                            <div class="text-xs text-gray-600 font-medium">Pickup</div>
+                        </div>
+                        <div class="bg-red-50 rounded-xl p-3 text-center">
+                            <div id="statReject" class="text-2xl font-bold text-red-600">0</div>
+                            <div class="text-xs text-gray-600 font-medium">Reject</div>
+                        </div>
+                        <div class="bg-amber-50 rounded-xl p-3 text-center">
+                            <div id="statReschedule" class="text-2xl font-bold text-amber-600">0</div>
+                            <div class="text-xs text-gray-600 font-medium">Pending</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- STEP 2: Dynamic Form -->
+            <div id="step-form" class="hidden space-y-4 slide-up">
+
+                <button onclick="goBack()" class="btn-bounce flex items-center gap-2 text-blue-600 font-bold px-4 py-2 rounded-xl glass shadow">
+                    <i data-lucide="arrow-left" class="w-5 h-5"></i>
+                    <span>Back</span>
+                </button>
+
+                <div id="formHeader" class="glass rounded-2xl p-5 shadow-xl">
+                    <div class="flex items-center gap-3">
+                        <div id="formIcon" class="w-12 h-12 rounded-xl flex items-center justify-center"></div>
+                        <div>
+                            <h2 id="formTitle" class="text-xl font-bold text-gray-800"></h2>
+                            <p id="formSubtitle" class="text-xs text-gray-500"></p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="glass rounded-2xl p-4 shadow-lg">
+                    <div class="flex items-center justify-between">
+                        <span class="text-xs font-bold text-gray-500">ORDER ID</span>
+                        <span id="displayOrderId" class="font-mono font-bold text-gray-800 text-sm"></span>
+                    </div>
+                </div>
+
+                <div id="formFields" class="glass rounded-2xl p-5 shadow-xl space-y-4"></div>
+
+                <button onclick="submitData()" id="submitBtn" class="btn-bounce w-full bg-gradient-to-r from-blue-600 to-purple-600 text-white p-4 rounded-2xl font-bold text-lg shadow-xl flex items-center justify-center gap-2">
+                    <i data-lucide="send" class="w-5 h-5"></i>
+                    <span>Submit & Send to WhatsApp</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scanner Modal -->
+    <div id="scannerModal" class="hidden fixed inset-0 scanner-overlay z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-3xl p-5 w-full max-w-sm shadow-2xl">
+            <div class="flex items-center justify-between mb-3">
+                <h3 class="font-bold text-lg flex items-center gap-2">
+                    <i data-lucide="scan-line" class="w-5 h-5 text-blue-600"></i>
+                    Scan IMEI
+                </h3>
+                <button onclick="stopScanner()" class="p-2 hover:bg-gray-100 rounded-full">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+
+            <!-- Mode Toggle -->
+            <div class="mode-toggle" id="scanModeToggle">
+                <button class="active" data-mode="barcode" onclick="setScanMode('barcode')">
+                    <i data-lucide="barcode" class="w-3.5 h-3.5 inline mr-1"></i> Barcode
+                </button>
+                <button data-mode="ocr" onclick="setScanMode('ocr')">
+                    <i data-lucide="monitor" class="w-3.5 h-3.5 inline mr-1"></i> Screen (*#06#)
+                </button>
+            </div>
+
+            <div class="scan-frame" id="scanFrame">
+                <video id="scanVideo" autoplay playsinline muted></video>
+                <div class="scan-overlay">
+                    <div class="scan-box">
+                        <div class="corner tl"></div>
+                        <div class="corner tr"></div>
+                        <div class="corner bl"></div>
+                        <div class="corner br"></div>
+                    </div>
+                </div>
+                <div class="scan-hint" id="scanHint">📱 Barcode ko box me align karo</div>
+            </div>
+
+            <div id="scanStatus" class="text-xs text-gray-500 text-center mt-3 flex items-center justify-center gap-2">
+                <span class="spinner" id="scanSpinner"></span>
+                <span id="scanStatusText">Initializing camera...</span>
+            </div>
+
+            <!-- OCR Progress -->
+            <div class="ocr-progress" id="ocrProgress" style="display:none;">
+                <div class="bar" id="ocrProgressBar"></div>
+            </div>
+
+            <!-- IMEI Result -->
+            <div class="imei-result" id="imeiResult">
+                <span id="imeiResultText"></span>
+            </div>
+
+            <!-- Capture Button (for OCR mode) -->
+            <button class="btn-capture" id="captureBtn" onclick="startOCRScanning()" style="display:none;">
+                <i data-lucide="camera"></i>
+                Capture & Read IMEI
+            </button>
+
+            <div class="mt-2 flex gap-2">
+                <button onclick="stopScanner()" class="btn-capture-secondary">
+                    Cancel
+                </button>
+            </div>
+
+            <div class="mt-3 p-3 bg-blue-50 rounded-xl text-xs text-blue-900" id="scanTip">
+                <strong>💡 Tip:</strong> Phone box ya back panel pe IMEI barcode hota hai. Usko scan karo. Agar barcode nahi hai toh "Screen" mode me *#06# screen dikhao aur Capture dabao — auto detect ho jaega!
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
