@@ -25,7 +25,7 @@ let hiddenImei2 = '';
 let scanMode = 'barcode';
 let pendingFilter = 'all';
 let allPendingOrders = [];
-let pendingDoneOrderId = null; // order ID being done from pending
+let pendingDoneOrderId = null;
 
 // Tesseract worker & OCR scanning state
 let tesseractWorker = null;
@@ -48,7 +48,7 @@ const rejectReasons = [
 ];
 
 const rescheduleReasons = [
-    { text: 'On the way', icon: 'map-pin' }, // ✅ added at TOP
+    { text: 'On the way', icon: 'map-pin' },
     { text: 'Customer not picking call', icon: 'phone-missed' },
     { text: 'Wrong address / pin code', icon: 'map-pin-off' },
     { text: 'Customer asked for tomorrow', icon: 'calendar' },
@@ -65,7 +65,6 @@ document.addEventListener('DOMContentLoaded', () => {
     loadPendingOrders();
     setupOfflineDetection();
 
-    // Real-time pending listener
     db.ref('pending').on('value', (snap) => {
         loadPendingOrders();
     });
@@ -77,15 +76,11 @@ function setupOfflineDetection() {
         document.getElementById('offlineBanner').classList.toggle('hidden', isOnline);
         const statusEl = document.getElementById('connectionStatus');
         if (isOnline) {
-            statusEl.className =
-                'flex items-center gap-1.5 px-2.5 py-1 bg-green-50 rounded-full';
-            statusEl.innerHTML =
-                '<div class="w-2 h-2 bg-green-500 rounded-full pulse-ring"></div><span class="text-xs font-medium text-green-700">Online</span>';
+            statusEl.className = 'flex items-center gap-1.5 px-2.5 py-1 bg-green-50 rounded-full';
+            statusEl.innerHTML = '<div class="w-2 h-2 bg-green-500 rounded-full pulse-ring"></div><span class="text-xs font-medium text-green-700">Online</span>';
         } else {
-            statusEl.className =
-                'flex items-center gap-1.5 px-2.5 py-1 bg-red-50 rounded-full';
-            statusEl.innerHTML =
-                '<div class="w-2 h-2 bg-red-500 rounded-full"></div><span class="text-xs font-medium text-red-700">Offline</span>';
+            statusEl.className = 'flex items-center gap-1.5 px-2.5 py-1 bg-red-50 rounded-full';
+            statusEl.innerHTML = '<div class="w-2 h-2 bg-red-500 rounded-full"></div><span class="text-xs font-medium text-red-700">Offline</span>';
         }
     };
     window.addEventListener('online', updateStatus);
@@ -102,9 +97,7 @@ async function loadTodayStats() {
         const snapshot = await db.ref('pickups').once('value');
         const data = snapshot.val() || {};
 
-        let pickup = 0,
-            reject = 0,
-            reschedule = 0;
+        let pickup = 0, reject = 0, reschedule = 0;
         Object.values(data).forEach(item => {
             if (new Date(item.timestamp).toDateString() === today) {
                 if (item.status === 'pickup') pickup++;
@@ -137,7 +130,6 @@ async function loadPendingOrders() {
             });
         }
 
-        // Sort by timestamp (newest first)
         allPendingOrders.sort((a, b) => {
             return (b.timestamp || 0) - (a.timestamp || 0);
         });
@@ -178,9 +170,7 @@ function renderPendingList() {
     }
 
     if (filtered.length === 0) {
-        const msg = pendingFilter === 'onway' ?
-            'No "On the way" orders' :
-            'No pending orders';
+        const msg = pendingFilter === 'onway' ? 'No "On the way" orders' : 'No pending orders';
         container.innerHTML = `
             <div class="pending-empty">
                 <i data-lucide="inbox"></i>
@@ -195,9 +185,7 @@ function renderPendingList() {
     let html = '';
     filtered.forEach(item => {
         const isOnWay = item.reason && item.reason.toLowerCase().includes('on the way');
-        const badge = isOnWay ?
-            '<span class="badge-onway">🚗 On the way</span>' :
-            '<span class="badge-pending">⏳ Pending</span>';
+        const badge = isOnWay ? '<span class="badge-onway">🚗 On the way</span>' : '<span class="badge-pending">⏳ Pending</span>';
         const time = item.timestampIST || item.timestamp || '';
         const reason = item.reason || '—';
 
@@ -230,31 +218,11 @@ function renderPendingList() {
     lucide.createIcons();
 }
 
-// ==========================================
-// MARK PENDING AS DONE → Open pickup form
-// ==========================================
 function markPendingDone(orderId) {
     pendingDoneOrderId = orderId;
-    // Set the order ID in the input field
     document.getElementById('orderId').value = orderId;
-    // Open pickup form
     showForm('pickup');
-    // Show a toast
     showToast(`📦 Pending order ${orderId} — fill pickup details`, 'info');
-}
-
-// ==========================================
-// DELETE PENDING ENTRY
-// ==========================================
-async function deletePending(orderId) {
-    try {
-        await db.ref('pending/' + orderId).remove();
-        console.log('✅ Pending deleted:', orderId);
-        // Refresh pending list
-        await loadPendingOrders();
-    } catch (e) {
-        console.error('Delete pending error:', e);
-    }
 }
 
 // ==========================================
@@ -276,7 +244,6 @@ async function pasteOrderId() {
 function showForm(status) {
     let orderId = document.getElementById('orderId').value.trim().toUpperCase();
 
-    // If coming from pending "Done", orderId is already set
     if (!orderId && pendingDoneOrderId) {
         orderId = pendingDoneOrderId;
         document.getElementById('orderId').value = orderId;
@@ -294,7 +261,6 @@ function showForm(status) {
         return;
     }
 
-    // Clear the pendingDoneOrderId after use
     pendingDoneOrderId = null;
 
     currentStatus = status;
@@ -315,18 +281,15 @@ function showForm(status) {
     if (status === 'pickup') {
         formTitle.innerText = "Pickup Details";
         formSubtitle.innerText = "Fill device information";
-        formIcon.className =
-            "w-12 h-12 rounded-xl flex items-center justify-center bg-gradient-to-br from-green-500 to-emerald-600";
+        formIcon.className = "w-12 h-12 rounded-xl flex items-center justify-center bg-gradient-to-br from-green-500 to-emerald-600";
         formIcon.innerHTML = '<i data-lucide="check-circle-2" class="w-7 h-7 text-white"></i>';
-        submitBtn.className =
-            'btn-bounce w-full bg-gradient-to-r from-green-500 to-emerald-600 text-white p-4 rounded-2xl font-bold text-lg shadow-xl flex items-center justify-center gap-2';
+        submitBtn.className = 'btn-bounce w-full bg-gradient-to-r from-green-500 to-emerald-600 text-white p-4 rounded-2xl font-bold text-lg shadow-xl flex items-center justify-center gap-2';
 
         formFields.innerHTML = `
             <div>
                 <label class="text-xs font-bold text-gray-500 mb-1.5 block">PHONE MODEL *</label>
                 <input type="text" id="phoneModel" placeholder="e.g., iPhone 12, Samsung S21" class="input-field w-full p-3.5 rounded-xl outline-none">
             </div>
-
             <div>
                 <label class="text-xs font-bold text-gray-500 mb-1.5 block">IMEI NUMBER *</label>
                 <div class="relative">
@@ -340,7 +303,6 @@ function showForm(status) {
                     <span>Barcode scan karo ya <strong>*#06#</strong> screen — Capture dabao, fatafat ho jaega!</span>
                 </p>
             </div>
-
             <div>
                 <label class="text-xs font-bold text-gray-500 mb-1.5 block">AGREED VALUE (₹) *</label>
                 <div class="relative">
@@ -348,7 +310,6 @@ function showForm(status) {
                     <input type="number" id="value" placeholder="0" class="input-field w-full p-3.5 pl-8 rounded-xl outline-none font-bold text-lg" inputmode="numeric">
                 </div>
             </div>
-
             <div>
                 <label class="text-xs font-bold text-gray-500 mb-1.5 block">CUSTOMER NAME <span class="text-gray-400">(Optional)</span></label>
                 <input type="text" id="custName" placeholder="Enter name" class="input-field w-full p-3.5 rounded-xl outline-none">
@@ -359,14 +320,10 @@ function showForm(status) {
         const isReject = status === 'rejected';
 
         formTitle.innerText = isReject ? "Rejection Reason" : "Reschedule / Pending";
-        formSubtitle.innerText = isReject ? "Select the most appropriate reason" :
-            "Select reason — 'On the way' means you're heading there";
-        formIcon.className =
-            `w-12 h-12 rounded-xl flex items-center justify-center bg-gradient-to-br ${isReject ? 'from-red-500 to-rose-600' : 'from-amber-500 to-orange-600'}`;
-        formIcon.innerHTML =
-            `<i data-lucide="${isReject ? 'x-circle' : 'clock'}" class="w-7 h-7 text-white"></i>`;
-        submitBtn.className =
-            `btn-bounce w-full bg-gradient-to-r ${isReject ? 'from-red-500 to-rose-600' : 'from-amber-500 to-orange-600'} text-white p-4 rounded-2xl font-bold text-lg shadow-xl flex items-center justify-center gap-2`;
+        formSubtitle.innerText = isReject ? "Select the most appropriate reason" : "Select reason — 'On the way' means you're heading there";
+        formIcon.className = `w-12 h-12 rounded-xl flex items-center justify-center bg-gradient-to-br ${isReject ? 'from-red-500 to-rose-600' : 'from-amber-500 to-orange-600'}`;
+        formIcon.innerHTML = `<i data-lucide="${isReject ? 'x-circle' : 'clock'}" class="w-7 h-7 text-white"></i>`;
+        submitBtn.className = `btn-bounce w-full bg-gradient-to-r ${isReject ? 'from-red-500 to-rose-600' : 'from-amber-500 to-orange-600'} text-white p-4 rounded-2xl font-bold text-lg shadow-xl flex items-center justify-center gap-2`;
 
         let reasonsHtml = '<div class="space-y-2">';
         reasons.forEach(r => {
@@ -380,11 +337,9 @@ function showForm(status) {
             `;
         });
         reasonsHtml += '</div>';
-        reasonsHtml +=
-            '<input type="text" id="otherReason" placeholder="Type your reason here..." class="input-field w-full p-3.5 rounded-xl outline-none hidden mt-3">';
+        reasonsHtml += '<input type="text" id="otherReason" placeholder="Type your reason here..." class="input-field w-full p-3.5 rounded-xl outline-none hidden mt-3">';
         formFields.innerHTML = reasonsHtml;
 
-        // Auto-select "On the way" if it exists
         setTimeout(() => {
             const firstBtn = document.querySelector('.reason-btn');
             if (firstBtn) {
@@ -431,14 +386,12 @@ function setScanMode(mode) {
 
     if (mode === 'barcode') {
         hint.textContent = '📱 Barcode ko box me align karo';
-        tip.innerHTML =
-            '<strong>💡 Tip:</strong> Phone box ya back panel pe IMEI barcode hota hai. Usko scan karo. Fatafat ho jaega!';
+        tip.innerHTML = '<strong>💡 Tip:</strong> Phone box ya back panel pe IMEI barcode hota hai. Usko scan karo. Fatafat ho jaega!';
         captureBtn.style.display = 'none';
         document.getElementById('imeiResult').classList.remove('show');
     } else {
         hint.textContent = '📱 *#06# screen dikhao — phir Capture dabao, auto detect ho jaega';
-        tip.innerHTML =
-            '<strong>💡 Tip:</strong> Phone me *#06# dial karo, IMEI screen dikhao. <strong>Capture</strong> dabao — background scan start ho jaega, IMEI detect hote hi fill ho jaega!';
+        tip.innerHTML = '<strong>💡 Tip:</strong> Phone me *#06# dial karo, IMEI screen dikhao. <strong>Capture</strong> dabao — background scan start ho jaega, IMEI detect hote hi fill ho jaega!';
         captureBtn.style.display = 'flex';
         document.getElementById('imeiResult').classList.remove('show');
         captureBtn.disabled = false;
@@ -559,15 +512,13 @@ async function startScanner() {
         );
 
         isScanning = true;
-        statusText.textContent = scanMode === 'barcode' ? '🎯 Scanning barcode...' :
-            '📱 Ready — tap Capture';
+        statusText.textContent = scanMode === 'barcode' ? '🎯 Scanning barcode...' : '📱 Ready — tap Capture';
         spinner.style.display = 'none';
 
         if (scanMode === 'ocr') {
             document.getElementById('captureBtn').style.display = 'flex';
             document.getElementById('captureBtn').disabled = false;
-            document.getElementById('captureBtn').innerHTML =
-                '<i data-lucide="camera"></i> Capture & Read IMEI';
+            document.getElementById('captureBtn').innerHTML = '<i data-lucide="camera"></i> Capture & Read IMEI';
             lucide.createIcons();
         } else {
             document.getElementById('captureBtn').style.display = 'none';
@@ -575,27 +526,23 @@ async function startScanner() {
 
         const tip = document.getElementById('scanTip');
         if (scanMode === 'barcode') {
-            tip.innerHTML =
-                '<strong>💡 Tip:</strong> Phone box ya back panel pe IMEI barcode hota hai. Auto scan ho jaega!';
+            tip.innerHTML = '<strong>💡 Tip:</strong> Phone box ya back panel pe IMEI barcode hota hai. Auto scan ho jaega!';
         } else {
-            tip.innerHTML =
-                '<strong>💡 Tip:</strong> Phone me *#06# dial karo, IMEI screen dikhao. <strong>Capture</strong> dabao — background scan start ho jaega, IMEI detect hote hi fill ho jaega!';
+            tip.innerHTML = '<strong>💡 Tip:</strong> Phone me *#06# dial karo, IMEI screen dikhao. <strong>Capture</strong> dabao — background scan start ho jaega, IMEI detect hote hi fill ho jaega!';
         }
 
     } catch (err) {
         console.error('Scanner error:', err);
         stopScanner();
         let msg = 'Camera access failed';
-        if (err.name === 'NotAllowedError') msg =
-        'Please allow camera permission in browser settings';
+        if (err.name === 'NotAllowedError') msg = 'Please allow camera permission in browser settings';
         else if (err.name === 'NotFoundError') msg = 'No camera found on this device';
         else if (err.name === 'NotSecureError' || window.location.protocol === 'file:') {
             msg = 'Camera needs HTTPS. Host this page online (Netlify/Vercel).';
         } else if (err.message && err.message.includes('ZXing')) {
             msg = 'Scanner library failed to load. Check internet.';
         }
-        Swal.fire({ icon: 'error', title: 'Camera Error', text: msg,
-        confirmButtonColor: '#3b82f6' });
+        Swal.fire({ icon: 'error', title: 'Camera Error', text: msg, confirmButtonColor: '#3b82f6' });
     }
 }
 
@@ -630,8 +577,7 @@ async function startOCRScanning() {
 
     const captureBtn = document.getElementById('captureBtn');
     captureBtn.disabled = true;
-    captureBtn.innerHTML =
-        '<span class="spinner" style="width:20px;height:20px;border-width:2px;"></span> Scanning...';
+    captureBtn.innerHTML = '<span class="spinner" style="width:20px;height:20px;border-width:2px;"></span> Scanning...';
 
     const statusText = document.getElementById('scanStatusText');
     const progress = document.getElementById('ocrProgress');
@@ -817,8 +763,7 @@ function isValidIMEI(imei) {
 function extractIMEIs(text) {
     console.log('🔍 Extracting IMEI from:', text);
 
-    let imei1 = null,
-        imei2 = null;
+    let imei1 = null, imei2 = null;
     const candidates = [];
 
     let clean = text
@@ -982,8 +927,7 @@ function stopScanner() {
 function showToast(message, type = 'info') {
     const colors = { success: 'bg-green-500', error: 'bg-red-500', info: 'bg-blue-500' };
     const toast = document.createElement('div');
-    toast.className =
-        `fixed top-20 left-1/2 -translate-x-1/2 ${colors[type]} text-white px-5 py-3 rounded-xl shadow-2xl z-[60] font-semibold text-sm fade-in max-w-[90%]`;
+    toast.className = `fixed top-20 left-1/2 -translate-x-1/2 ${colors[type]} text-white px-5 py-3 rounded-xl shadow-2xl z-[60] font-semibold text-sm fade-in max-w-[90%]`;
     toast.textContent = message;
     document.body.appendChild(toast);
     setTimeout(() => {
@@ -1015,35 +959,87 @@ function getISTDateTime() {
 }
 
 // ==========================================
-// SUBMIT DATA — with duplicate prevention
+// SUBMIT DATA — with password check + duplicate pickup prevention
 // ==========================================
 async function submitData() {
     const orderId = document.getElementById('orderId').value.trim().toUpperCase();
 
-    // 🔥 DUPLICATE CHECK: prevent saving if order already exists in 'pickups'
+    // ✅ First check: if order exists in pickups
+    let existingData = null;
+    let exists = false;
     try {
         const existingSnap = await db.ref('pickups/' + orderId).once('value');
-        if (existingSnap.exists()) {
+        exists = existingSnap.exists();
+        if (exists) {
+            existingData = existingSnap.val();
+        }
+    } catch (e) {
+        console.error('Check error:', e);
+        showToast('Error checking order status', 'error');
+        return;
+    }
+
+    // 🔐 If exists and status is 'rejected' and we're trying 'pickup' → password required
+    if (exists && existingData.status === 'rejected' && currentStatus === 'pickup') {
+        const { value: password, isConfirmed } = await Swal.fire({
+            title: '🔐 Admin Password Required',
+            html: `
+                <p class="text-sm text-gray-600 mb-2">This order was previously <span class="text-red-600 font-bold">REJECTED</span>.</p>
+                <p class="text-sm text-gray-600 mb-2">Enter admin password to mark as <span class="text-green-600 font-bold">PICKUP COMPLETED</span>.</p>
+                <p class="text-xs text-gray-400 mt-2">Only admin knows this password.</p>
+            `,
+            input: 'password',
+            inputPlaceholder: 'Enter admin password',
+            inputAttributes: {
+                autocapitalize: 'off',
+                autocorrect: 'off'
+            },
+            showCancelButton: true,
+            confirmButtonColor: '#3b82f6',
+            cancelButtonColor: '#dc2626',
+            confirmButtonText: '✅ Verify & Proceed',
+            cancelButtonText: 'Cancel',
+            allowOutsideClick: false,
+            preConfirm: (input) => {
+                if (!input) {
+                    Swal.showValidationMessage('Please enter the password');
+                    return false;
+                }
+                return input;
+            }
+        });
+
+        if (!isConfirmed) {
+            showToast('❌ Operation cancelled', 'error');
+            return;
+        }
+
+        // Check password
+        if (password !== 'admin123') {
             Swal.fire({
                 icon: 'error',
-                title: 'Duplicate Order ID',
-                text: `Order ID "${orderId}" already exists in the system. Use Admin panel to update.`,
-                confirmButtonColor: '#3b82f6'
+                title: '❌ Wrong Password',
+                text: 'Invalid admin password. Access denied.',
+                confirmButtonColor: '#dc2626'
             });
             return;
         }
-    } catch (e) {
-        console.error('Duplicate check error:', e);
-        // If error, we still proceed? Safer to stop.
+
+        showToast('✅ Password verified! Proceeding...', 'success');
+    }
+
+    // ✅ DUPLICATE PICKUP CHECK: if exists and status is already 'pickup' and we're trying 'pickup'
+    if (exists && existingData.status === 'pickup' && currentStatus === 'pickup') {
         Swal.fire({
             icon: 'error',
-            title: 'Check Failed',
-            text: 'Could not verify order ID. Please try again.',
+            title: 'Already Pickup Completed',
+            text: `Order ID "${orderId}" is already marked as Pickup Completed. You cannot submit it again.`,
             confirmButtonColor: '#3b82f6'
         });
         return;
     }
 
+    // ✅ Proceed with normal submission
     const now = new Date();
     const istDateTime = getISTDateTime();
 
@@ -1111,7 +1107,6 @@ async function submitData() {
         if (currentStatus === 'rejected') {
             whatsappMsg = `Order ID: ${orderId}\nStatus: Rejected\nReason: ${reason}`;
         } else {
-            // Reschedule / Pending — save to pending
             whatsappMsg = `Order ID: ${orderId}\nReason: ${reason}`;
         }
     }
@@ -1124,19 +1119,27 @@ async function submitData() {
     });
 
     try {
-        // Save to pickups
-        await db.ref('pickups/' + orderId).set(dbData);
-
-        // ✅ If this was a pending order, DELETE it from pending
-        const pendingSnap = await db.ref('pending/' + orderId).once('value');
-        if (pendingSnap.exists()) {
-            await db.ref('pending/' + orderId).remove();
-            console.log('🗑️ Pending deleted after pickup:', orderId);
-            // Refresh pending list
-            await loadPendingOrders();
+        if (exists) {
+            // Update existing record (merge new data)
+            await db.ref('pickups/' + orderId).update(dbData);
+            console.log('🔄 Updated existing order:', orderId);
+        } else {
+            // Create new record
+            await db.ref('pickups/' + orderId).set(dbData);
+            console.log('✅ Created new order:', orderId);
         }
 
-        // For reschedule: save to pending (only if not pickup and not rejected)
+        // Handle pending: if status is pickup or rejected, remove from pending
+        if (currentStatus === 'pickup' || currentStatus === 'rejected') {
+            const pendingSnap = await db.ref('pending/' + orderId).once('value');
+            if (pendingSnap.exists()) {
+                await db.ref('pending/' + orderId).remove();
+                console.log('🗑️ Pending removed:', orderId);
+                await loadPendingOrders();
+            }
+        }
+
+        // For reschedule: save/update pending
         if (currentStatus === 'reschedule') {
             const pendingData = {
                 orderId,
@@ -1146,7 +1149,8 @@ async function submitData() {
                 timestampIST: istDateTime,
             };
             await db.ref('pending/' + orderId).set(pendingData);
-            console.log('📌 Saved to pending:', orderId);
+            console.log('📌 Pending saved/updated:', orderId);
+            await loadPendingOrders();
         }
 
         const result = await Swal.fire({
