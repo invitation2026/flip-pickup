@@ -57,7 +57,7 @@ const rescheduleReasons = [
 ];
 
 // ==========================================
-// AUTH FUNCTIONS
+// AUTH FUNCTIONS (with user existence check)
 // ==========================================
 async function loginUser() {
     const username = document.getElementById('loginUsername').value.trim().toLowerCase();
@@ -86,7 +86,6 @@ async function loginUser() {
             return;
         }
 
-        // Login success
         currentUser = {
             username: username,
             name: userData.name,
@@ -98,6 +97,9 @@ async function loginUser() {
 
         loadTodayStats();
         loadPendingOrders();
+
+        // Start periodic user existence check
+        startUserExistenceCheck();
 
     } catch (e) {
         console.error('Login error:', e);
@@ -112,6 +114,7 @@ function logoutUser() {
     document.getElementById('mainApp').style.display = 'none';
     document.getElementById('authOverlay').style.display = 'flex';
     showToast('Logged out', 'info');
+    stopUserExistenceCheck();
 }
 
 function checkAuth() {
@@ -119,15 +122,52 @@ function checkAuth() {
     if (stored) {
         try {
             currentUser = JSON.parse(stored);
-            showMainApp();
-            loadTodayStats();
-            loadPendingOrders();
+            verifyUserExists(currentUser.username).then(exists => {
+                if (exists) {
+                    showMainApp();
+                    loadTodayStats();
+                    loadPendingOrders();
+                    startUserExistenceCheck();
+                } else {
+                    logoutUser();
+                    showToast('❌ Your account has been deleted. Please contact admin.', 'error');
+                }
+            });
             return true;
         } catch (e) {
             localStorage.removeItem('flipkart_agent_user');
         }
     }
     return false;
+}
+
+function verifyUserExists(username) {
+    return db.ref('users/' + username).once('value').then(snap => snap.exists());
+}
+
+let userCheckInterval = null;
+
+function startUserExistenceCheck() {
+    stopUserExistenceCheck();
+    userCheckInterval = setInterval(() => {
+        if (currentUser) {
+            verifyUserExists(currentUser.username).then(exists => {
+                if (!exists) {
+                    logoutUser();
+                    showToast('❌ Your account has been deleted. You have been logged out.', 'error');
+                    document.getElementById('authOverlay').style.display = 'flex';
+                    document.getElementById('mainApp').style.display = 'none';
+                }
+            }).catch(err => console.warn('User existence check error:', err));
+        }
+    }, 10000);
+}
+
+function stopUserExistenceCheck() {
+    if (userCheckInterval) {
+        clearInterval(userCheckInterval);
+        userCheckInterval = null;
+    }
 }
 
 function showMainApp() {
@@ -172,7 +212,6 @@ function showChangePassword() {
         if (result.isConfirmed) {
             try {
                 await db.ref('users/' + currentUser.username + '/password').set(result.value);
-                // Update local storage
                 currentUser.password = result.value;
                 localStorage.setItem('flipkart_agent_user', JSON.stringify(currentUser));
                 showToast('✅ Password updated successfully', 'success');
@@ -198,7 +237,6 @@ document.addEventListener('DOMContentLoaded', () => {
             loadPendingOrders();
         });
     }
-    // Enter key on login fields
     document.getElementById('loginPassword').addEventListener('keydown', (e) => {
         if (e.key === 'Enter') loginUser();
     });
@@ -208,7 +246,7 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // ==========================================
-// ORIGINAL FUNCTIONS (with agent filter)
+// ORIGINAL FUNCTIONS
 // ==========================================
 
 function setupOfflineDetection() {
@@ -327,6 +365,7 @@ function renderPendingList() {
         const badge = isOnWay ? '<span class="badge-onway">🚗 On the way</span>' : '<span class="badge-pending">⏳ Pending</span>';
         const time = item.timestampIST || item.timestamp || '';
         const reason = item.reason || '—';
+        const model = item.phoneModel || '—';
 
         html += `
             <div class="pending-item glass rounded-xl p-4 mb-3 shadow">
@@ -335,6 +374,7 @@ function renderPendingList() {
                         <div class="flex items-center gap-2 flex-wrap">
                             <span class="font-mono font-bold text-gray-800 text-sm">${item.orderId}</span>
                             ${badge}
+                            <span class="text-xs text-gray-400">(${model})</span>
                         </div>
                         <p class="text-xs text-gray-500 mt-1 flex items-center gap-1">
                             <i data-lucide="message-circle" class="w-3 h-3"></i>
@@ -374,6 +414,9 @@ async function pasteOrderId() {
     }
 }
 
+// ==========================================
+// SHOW FORM — with model field for reject & reschedule
+// ==========================================
 function showForm(status) {
     let orderId = document.getElementById('orderId').value.trim().toUpperCase();
 
@@ -458,7 +501,13 @@ function showForm(status) {
         formIcon.innerHTML = `<i data-lucide="${isReject ? 'x-circle' : 'clock'}" class="w-7 h-7 text-white"></i>`;
         submitBtn.className = `btn-bounce w-full bg-gradient-to-r ${isReject ? 'from-red-500 to-rose-600' : 'from-amber-500 to-orange-600'} text-white p-4 rounded-2xl font-bold text-lg shadow-xl flex items-center justify-center gap-2`;
 
-        let reasonsHtml = '<div class="space-y-2">';
+        let reasonsHtml = `
+            <div>
+                <label class="text-xs font-bold text-gray-500 mb-1.5 block">PHONE MODEL *</label>
+                <input type="text" id="phoneModelRejectReschedule" placeholder="e.g., iPhone 12, Samsung S21" class="input-field w-full p-3.5 rounded-xl outline-none">
+            </div>
+            <div class="space-y-2">
+        `;
         reasons.forEach(r => {
             reasonsHtml += `
                 <button onclick="selectReason(this, '${r.text}')" data-reason="${r.text}" class="reason-btn w-full text-left p-3.5 rounded-xl flex items-center gap-3 hover:bg-gray-50">
@@ -683,7 +732,6 @@ async function startScanner() {
 // START OCR SCANNING
 // ==========================================
 async function startOCRScanning() {
-    // (unchanged)
     if (scanMode !== 'ocr') return;
     if (isOcrScanning) {
         showToast('Already scanning...', 'info');
@@ -721,7 +769,6 @@ async function startOCRScanning() {
 
     statusText.textContent = '📸 Capturing & scanning...';
 
-    // Immediate capture
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
     const maxW = 800;
@@ -757,7 +804,6 @@ async function startOCRScanning() {
         console.error('Immediate OCR error:', e);
     }
 
-    // Background scanning
     statusText.textContent = '🔍 Scanning in background...';
     progressBar.style.width = '0%';
     ocrAttemptCount = 0;
@@ -895,7 +941,6 @@ function isValidIMEI(imei) {
 // EXTRACT IMEI
 // ==========================================
 function extractIMEIs(text) {
-    // (unchanged)
     console.log('🔍 Extracting IMEI from:', text);
 
     let imei1 = null, imei2 = null;
@@ -1094,7 +1139,7 @@ function getISTDateTime() {
 }
 
 // ==========================================
-// SUBMIT DATA
+// SUBMIT DATA — with model for reject & reschedule
 // ==========================================
 async function submitData() {
     if (!currentUser) {
@@ -1214,6 +1259,19 @@ async function submitData() {
         whatsappMsg = `Order ID: ${orderId}\nStatus: Pickup Completed`;
 
     } else {
+        // Reject or Reschedule: get model and reason
+        const phoneModel = document.getElementById('phoneModelRejectReschedule').value.trim();
+        if (!phoneModel) {
+            Swal.fire({
+                icon: 'error',
+                title: 'Missing Model',
+                text: 'Please enter the phone model.',
+                confirmButtonColor: '#3b82f6'
+            });
+            return;
+        }
+        dbData.phoneModel = phoneModel;
+
         let reason = selectedReason;
         if (reason.toLowerCase().includes('other')) {
             reason = document.getElementById('otherReason').value.trim();
@@ -1240,9 +1298,40 @@ async function submitData() {
         dbData.reason = reason;
 
         if (currentStatus === 'rejected') {
-            whatsappMsg = `Order ID: ${orderId}\nStatus: Rejected\nReason: ${reason}`;
+            whatsappMsg = `Order ID: ${orderId}\nStatus: Rejected\nModel: ${phoneModel}\nReason: ${reason}`;
         } else {
-            whatsappMsg = `Order ID: ${orderId}\nReason: ${reason}`;
+            whatsappMsg = `Order ID: ${orderId}\nModel: ${phoneModel}\nReason: ${reason}`;
+        }
+    }
+
+    // Check if this is a reschedule and order is already pending with a different reason
+    if (currentStatus === 'reschedule') {
+        try {
+            const pendingSnap = await db.ref('pending/' + orderId).once('value');
+            if (pendingSnap.exists()) {
+                const existingPending = pendingSnap.val();
+                const existingReason = existingPending.reason || '';
+                const newReason = dbData.reason || selectedReason;
+
+                if (existingReason !== newReason) {
+                    const result = await Swal.fire({
+                        title: 'Change Reason?',
+                        text: `This order is already pending with reason: "${existingReason}". Do you want to update it to "${newReason}"?`,
+                        icon: 'question',
+                        showCancelButton: true,
+                        confirmButtonColor: '#f59e0b',
+                        cancelButtonColor: '#64748b',
+                        confirmButtonText: 'Yes, update reason',
+                        cancelButtonText: 'Cancel'
+                    });
+                    if (!result.isConfirmed) {
+                        showToast('❌ Update cancelled', 'error');
+                        return;
+                    }
+                }
+            }
+        } catch (e) {
+            console.error('Pending check error:', e);
         }
     }
 
@@ -1274,6 +1363,7 @@ async function submitData() {
         if (currentStatus === 'reschedule') {
             const pendingData = {
                 orderId,
+                phoneModel: dbData.phoneModel,
                 reason: dbData.reason || selectedReason,
                 status: 'reschedule',
                 timestamp: now.toISOString(),
