@@ -17,6 +17,7 @@ const db = firebase.database();
 // ==========================================
 // STATE
 // ==========================================
+let currentUser = null;
 let currentStatus = '';
 let selectedReason = '';
 let zxingCodeReader = null;
@@ -27,7 +28,6 @@ let pendingFilter = 'all';
 let allPendingOrders = [];
 let pendingDoneOrderId = null;
 
-// Tesseract worker & OCR scanning state
 let tesseractWorker = null;
 let ocrInterval = null;
 let isOcrScanning = false;
@@ -35,7 +35,7 @@ let ocrAttemptCount = 0;
 let lastDetectedImei = '';
 
 // ==========================================
-// REASONS — "On the way" added at TOP
+// REASONS
 // ==========================================
 const rejectReasons = [
     { text: 'Customer wanted price only', icon: 'indian-rupee' },
@@ -57,18 +57,113 @@ const rescheduleReasons = [
 ];
 
 // ==========================================
+// AUTH FUNCTIONS
+// ==========================================
+async function loginUser() {
+    const username = document.getElementById('loginUsername').value.trim().toLowerCase();
+    const password = document.getElementById('loginPassword').value.trim();
+    const errorEl = document.getElementById('loginError');
+
+    if (!username || !password) {
+        errorEl.textContent = 'Please enter both username and password.';
+        errorEl.style.display = 'block';
+        return;
+    }
+
+    errorEl.style.display = 'none';
+
+    try {
+        const snap = await db.ref('users/' + username).once('value');
+        if (!snap.exists()) {
+            errorEl.textContent = 'User not found. Please check your username.';
+            errorEl.style.display = 'block';
+            return;
+        }
+        const userData = snap.val();
+        if (userData.password !== password) {
+            errorEl.textContent = 'Incorrect password. Please try again.';
+            errorEl.style.display = 'block';
+            return;
+        }
+
+        // Login success
+        currentUser = {
+            username: username,
+            name: userData.name,
+            ...userData
+        };
+        localStorage.setItem('flipkart_agent_user', JSON.stringify(currentUser));
+        showMainApp();
+        showToast('✅ Welcome, ' + currentUser.name + '!', 'success');
+
+        loadTodayStats();
+        loadPendingOrders();
+
+    } catch (e) {
+        console.error('Login error:', e);
+        errorEl.textContent = 'Something went wrong. Please try again.';
+        errorEl.style.display = 'block';
+    }
+}
+
+function logoutUser() {
+    localStorage.removeItem('flipkart_agent_user');
+    currentUser = null;
+    document.getElementById('mainApp').style.display = 'none';
+    document.getElementById('authOverlay').style.display = 'flex';
+    showToast('Logged out', 'info');
+}
+
+function checkAuth() {
+    const stored = localStorage.getItem('flipkart_agent_user');
+    if (stored) {
+        try {
+            currentUser = JSON.parse(stored);
+            showMainApp();
+            loadTodayStats();
+            loadPendingOrders();
+            return true;
+        } catch (e) {
+            localStorage.removeItem('flipkart_agent_user');
+        }
+    }
+    return false;
+}
+
+function showMainApp() {
+    document.getElementById('authOverlay').style.display = 'none';
+    document.getElementById('mainApp').style.display = 'block';
+    document.getElementById('userNameDisplay').textContent = currentUser.name || currentUser.username;
+    setupOfflineDetection();
+    lucide.createIcons();
+}
+
+// ==========================================
 // INIT
 // ==========================================
 document.addEventListener('DOMContentLoaded', () => {
-    lucide.createIcons();
-    loadTodayStats();
-    loadPendingOrders();
-    setupOfflineDetection();
-
-    db.ref('pending').on('value', (snap) => {
-        loadPendingOrders();
+    document.getElementById('offlineBanner').classList.add('hidden');
+    const loggedIn = checkAuth();
+    if (!loggedIn) {
+        document.getElementById('authOverlay').style.display = 'flex';
+    }
+    if (loggedIn) {
+        db.ref('pending').on('value', (snap) => {
+            loadPendingOrders();
+        });
+    }
+    // Enter key on login fields
+    document.getElementById('loginPassword').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') loginUser();
+    });
+    document.getElementById('loginUsername').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') document.getElementById('loginPassword').focus();
     });
 });
+
+// ==========================================
+// ORIGINAL FUNCTIONS (with agent filter)
+// ==========================================
 
 function setupOfflineDetection() {
     const updateStatus = () => {
@@ -88,10 +183,8 @@ function setupOfflineDetection() {
     updateStatus();
 }
 
-// ==========================================
-// LOAD TODAY STATS
-// ==========================================
 async function loadTodayStats() {
+    if (!currentUser) return;
     try {
         const today = new Date().toDateString();
         const snapshot = await db.ref('pickups').once('value');
@@ -99,7 +192,7 @@ async function loadTodayStats() {
 
         let pickup = 0, reject = 0, reschedule = 0;
         Object.values(data).forEach(item => {
-            if (new Date(item.timestamp).toDateString() === today) {
+            if (item.agent === currentUser.username && new Date(item.timestamp).toDateString() === today) {
                 if (item.status === 'pickup') pickup++;
                 else if (item.status === 'rejected') reject++;
                 else if (item.status === 'reschedule') reschedule++;
@@ -114,20 +207,20 @@ async function loadTodayStats() {
     }
 }
 
-// ==========================================
-// LOAD PENDING ORDERS
-// ==========================================
 async function loadPendingOrders() {
+    if (!currentUser) return;
     try {
         const snapshot = await db.ref('pending').once('value');
         const data = snapshot.val() || {};
         allPendingOrders = [];
 
         for (const [orderId, item] of Object.entries(data)) {
-            allPendingOrders.push({
-                orderId,
-                ...item
-            });
+            if (item.agent === currentUser.username) {
+                allPendingOrders.push({
+                    orderId,
+                    ...item
+                });
+            }
         }
 
         allPendingOrders.sort((a, b) => {
@@ -225,9 +318,6 @@ function markPendingDone(orderId) {
     showToast(`📦 Pending order ${orderId} — fill pickup details`, 'info');
 }
 
-// ==========================================
-// PASTE ORDER ID
-// ==========================================
 async function pasteOrderId() {
     try {
         const text = await navigator.clipboard.readText();
@@ -238,9 +328,6 @@ async function pasteOrderId() {
     }
 }
 
-// ==========================================
-// NAVIGATION
-// ==========================================
 function showForm(status) {
     let orderId = document.getElementById('orderId').value.trim().toUpperCase();
 
@@ -959,12 +1046,16 @@ function getISTDateTime() {
 }
 
 // ==========================================
-// SUBMIT DATA — with password check + duplicate pickup prevention
+// SUBMIT DATA
 // ==========================================
 async function submitData() {
+    if (!currentUser) {
+        showToast('Please login first', 'error');
+        return;
+    }
+
     const orderId = document.getElementById('orderId').value.trim().toUpperCase();
 
-    // ✅ First check: if order exists in pickups
     let existingData = null;
     let exists = false;
     try {
@@ -979,7 +1070,7 @@ async function submitData() {
         return;
     }
 
-    // 🔐 If exists and status is 'rejected' and we're trying 'pickup' → password required
+    // Password required for rejected -> pickup
     if (exists && existingData.status === 'rejected' && currentStatus === 'pickup') {
         const { value: password, isConfirmed } = await Swal.fire({
             title: '🔐 Admin Password Required',
@@ -990,10 +1081,7 @@ async function submitData() {
             `,
             input: 'password',
             inputPlaceholder: 'Enter admin password',
-            inputAttributes: {
-                autocapitalize: 'off',
-                autocorrect: 'off'
-            },
+            inputAttributes: { autocapitalize: 'off', autocorrect: 'off' },
             showCancelButton: true,
             confirmButtonColor: '#3b82f6',
             cancelButtonColor: '#dc2626',
@@ -1014,7 +1102,6 @@ async function submitData() {
             return;
         }
 
-        // Check password
         if (password !== 'admin123') {
             Swal.fire({
                 icon: 'error',
@@ -1028,7 +1115,7 @@ async function submitData() {
         showToast('✅ Password verified! Proceeding...', 'success');
     }
 
-    // ✅ DUPLICATE PICKUP CHECK: if exists and status is already 'pickup' and we're trying 'pickup'
+    // Duplicate pickup prevention
     if (exists && existingData.status === 'pickup' && currentStatus === 'pickup') {
         Swal.fire({
             icon: 'error',
@@ -1039,7 +1126,6 @@ async function submitData() {
         return;
     }
 
-    // ✅ Proceed with normal submission
     const now = new Date();
     const istDateTime = getISTDateTime();
 
@@ -1049,7 +1135,8 @@ async function submitData() {
         timestamp: now.toISOString(),
         timestampIST: istDateTime,
         date: now.toLocaleDateString('en-IN'),
-        time: now.toLocaleTimeString('en-IN')
+        time: now.toLocaleTimeString('en-IN'),
+        agent: currentUser.username
     };
 
     let whatsappMsg = '';
@@ -1120,16 +1207,13 @@ async function submitData() {
 
     try {
         if (exists) {
-            // Update existing record (merge new data)
             await db.ref('pickups/' + orderId).update(dbData);
             console.log('🔄 Updated existing order:', orderId);
         } else {
-            // Create new record
             await db.ref('pickups/' + orderId).set(dbData);
             console.log('✅ Created new order:', orderId);
         }
 
-        // Handle pending: if status is pickup or rejected, remove from pending
         if (currentStatus === 'pickup' || currentStatus === 'rejected') {
             const pendingSnap = await db.ref('pending/' + orderId).once('value');
             if (pendingSnap.exists()) {
@@ -1139,7 +1223,6 @@ async function submitData() {
             }
         }
 
-        // For reschedule: save/update pending
         if (currentStatus === 'reschedule') {
             const pendingData = {
                 orderId,
@@ -1147,6 +1230,7 @@ async function submitData() {
                 status: 'reschedule',
                 timestamp: now.toISOString(),
                 timestampIST: istDateTime,
+                agent: currentUser.username
             };
             await db.ref('pending/' + orderId).set(pendingData);
             console.log('📌 Pending saved/updated:', orderId);
