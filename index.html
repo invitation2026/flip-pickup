@@ -505,28 +505,37 @@
         .user-badge {
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 6px;
             background: #eef2ff;
-            padding: 4px 12px 4px 8px;
+            padding: 4px 10px 4px 8px;
             border-radius: 30px;
             font-size: 13px;
             font-weight: 600;
             color: #4f46e5;
         }
-        .user-badge .logout-btn {
+        .user-badge .sep {
+            color: #cbd5e1;
+            font-weight: 300;
+        }
+        .user-badge .action-btn {
             background: none;
             border: none;
             color: #94a3b8;
             cursor: pointer;
             font-size: 16px;
-            padding: 0 4px;
+            padding: 0 2px;
+            transition: 0.2s;
+            display: inline-flex;
+            align-items: center;
         }
+        .user-badge .action-btn:hover { color: #4f46e5; }
         .user-badge .logout-btn:hover { color: #dc2626; }
 
         /* Mobile optimizations */
         @media (max-width: 480px) {
             .auth-box { padding: 24px 18px; }
             .auth-box h2 { font-size: 20px; }
+            .user-badge { font-size: 12px; gap: 4px; padding: 3px 8px; }
         }
     </style>
 </head>
@@ -574,14 +583,20 @@
                         <p class="text-xs text-gray-500">Agent Portal</p>
                     </div>
                 </div>
-                <div class="flex items-center gap-2">
-                    <div id="connectionStatus" class="flex items-center gap-1.5 px-2.5 py-1 bg-green-50 rounded-full">
-                        <div class="w-2 h-2 bg-green-500 rounded-full pulse-ring"></div>
-                        <span class="text-xs font-medium text-green-700">Online</span>
+                <div class="flex items-center gap-1.5">
+                    <div id="connectionStatus" class="flex items-center gap-1 px-2 py-1 bg-green-50 rounded-full">
+                        <div class="w-1.5 h-1.5 bg-green-500 rounded-full pulse-ring"></div>
+                        <span class="text-[10px] font-medium text-green-700 hidden sm:inline">Online</span>
                     </div>
                     <div class="user-badge" id="userBadge">
-                        <span id="userNameDisplay">Agent</span>
-                        <button class="logout-btn" onclick="logoutUser()" title="Logout">✕</button>
+                        <span id="userNameDisplay" class="text-xs">Agent</span>
+                        <span class="sep">|</span>
+                        <button class="action-btn" onclick="showChangePassword()" title="Change Password">
+                            <i data-lucide="key" class="w-3.5 h-3.5"></i>
+                        </button>
+                        <button class="action-btn logout-btn" onclick="logoutUser()" title="Logout">
+                            <i data-lucide="log-out" class="w-3.5 h-3.5"></i>
+                        </button>
                     </div>
                 </div>
             </div>

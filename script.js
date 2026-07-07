@@ -139,6 +139,52 @@ function showMainApp() {
 }
 
 // ==========================================
+// CHANGE PASSWORD (for agent)
+// ==========================================
+function showChangePassword() {
+    if (!currentUser) return;
+    Swal.fire({
+        title: 'Change Password',
+        html: `
+            <p class="text-sm text-gray-600 mb-2">Change your login password</p>
+            <input type="password" id="newPw" class="swal2-input" placeholder="New password" minlength="4">
+            <input type="password" id="confirmPw" class="swal2-input" placeholder="Confirm new password" minlength="4">
+        `,
+        showCancelButton: true,
+        confirmButtonText: 'Update Password',
+        cancelButtonText: 'Cancel',
+        confirmButtonColor: '#4f46e5',
+        cancelButtonColor: '#64748b',
+        preConfirm: () => {
+            const newPw = document.getElementById('newPw').value;
+            const confirmPw = document.getElementById('confirmPw').value;
+            if (!newPw || newPw.length < 4) {
+                Swal.showValidationMessage('Password must be at least 4 characters');
+                return false;
+            }
+            if (newPw !== confirmPw) {
+                Swal.showValidationMessage('Passwords do not match');
+                return false;
+            }
+            return newPw;
+        }
+    }).then(async (result) => {
+        if (result.isConfirmed) {
+            try {
+                await db.ref('users/' + currentUser.username + '/password').set(result.value);
+                // Update local storage
+                currentUser.password = result.value;
+                localStorage.setItem('flipkart_agent_user', JSON.stringify(currentUser));
+                showToast('✅ Password updated successfully', 'success');
+            } catch (e) {
+                showToast('Error updating password', 'error');
+                console.error(e);
+            }
+        }
+    });
+}
+
+// ==========================================
 // INIT
 // ==========================================
 document.addEventListener('DOMContentLoaded', () => {
@@ -171,11 +217,11 @@ function setupOfflineDetection() {
         document.getElementById('offlineBanner').classList.toggle('hidden', isOnline);
         const statusEl = document.getElementById('connectionStatus');
         if (isOnline) {
-            statusEl.className = 'flex items-center gap-1.5 px-2.5 py-1 bg-green-50 rounded-full';
-            statusEl.innerHTML = '<div class="w-2 h-2 bg-green-500 rounded-full pulse-ring"></div><span class="text-xs font-medium text-green-700">Online</span>';
+            statusEl.className = 'flex items-center gap-1 px-2 py-1 bg-green-50 rounded-full';
+            statusEl.innerHTML = '<div class="w-1.5 h-1.5 bg-green-500 rounded-full pulse-ring"></div><span class="text-[10px] font-medium text-green-700 hidden sm:inline">Online</span>';
         } else {
-            statusEl.className = 'flex items-center gap-1.5 px-2.5 py-1 bg-red-50 rounded-full';
-            statusEl.innerHTML = '<div class="w-2 h-2 bg-red-500 rounded-full"></div><span class="text-xs font-medium text-red-700">Offline</span>';
+            statusEl.className = 'flex items-center gap-1 px-2 py-1 bg-red-50 rounded-full';
+            statusEl.innerHTML = '<div class="w-1.5 h-1.5 bg-red-500 rounded-full"></div><span class="text-[10px] font-medium text-red-700 hidden sm:inline">Offline</span>';
         }
     };
     window.addEventListener('online', updateStatus);
@@ -637,6 +683,7 @@ async function startScanner() {
 // START OCR SCANNING
 // ==========================================
 async function startOCRScanning() {
+    // (unchanged)
     if (scanMode !== 'ocr') return;
     if (isOcrScanning) {
         showToast('Already scanning...', 'info');
@@ -848,6 +895,7 @@ function isValidIMEI(imei) {
 // EXTRACT IMEI
 // ==========================================
 function extractIMEIs(text) {
+    // (unchanged)
     console.log('🔍 Extracting IMEI from:', text);
 
     let imei1 = null, imei2 = null;
