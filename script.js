@@ -57,7 +57,42 @@ const rescheduleReasons = [
 ];
 
 // ==========================================
-// AUTH FUNCTIONS (with user existence check)
+// USER LISTENER (Real-time, no polling)
+// ==========================================
+let userListenerRef = null;
+
+function startUserExistenceCheck() {
+    if (!currentUser) return;
+    stopUserExistenceCheck(); // cleanup previous listener
+    const userRef = db.ref('users/' + currentUser.username);
+    userRef.on('value', (snapshot) => {
+        if (!snapshot.exists()) {
+            // User deleted by admin
+            logoutUser();
+            showToast('❌ Your account has been deleted. You have been logged out.', 'error');
+            return;
+        }
+        const data = snapshot.val();
+        if (data.forceLogout === true) {
+            // Admin forced logout
+            // Remove the flag so it doesn't trigger again
+            userRef.update({ forceLogout: null }).catch(() => {});
+            logoutUser();
+            showToast('🔒 You have been logged out by admin.', 'info');
+        }
+    });
+    userListenerRef = userRef;
+}
+
+function stopUserExistenceCheck() {
+    if (userListenerRef) {
+        userListenerRef.off();
+        userListenerRef = null;
+    }
+}
+
+// ==========================================
+// AUTH FUNCTIONS
 // ==========================================
 async function loginUser() {
     const username = document.getElementById('loginUsername').value.trim().toLowerCase();
@@ -98,7 +133,7 @@ async function loginUser() {
         loadTodayStats();
         loadPendingOrders();
 
-        // Start periodic user existence check
+        // Start real-time listener
         startUserExistenceCheck();
 
     } catch (e) {
@@ -109,12 +144,12 @@ async function loginUser() {
 }
 
 function logoutUser() {
+    stopUserExistenceCheck(); // cleanup listener
     localStorage.removeItem('flipkart_agent_user');
     currentUser = null;
     document.getElementById('mainApp').style.display = 'none';
     document.getElementById('authOverlay').style.display = 'flex';
     showToast('Logged out', 'info');
-    stopUserExistenceCheck();
 }
 
 function checkAuth() {
@@ -127,7 +162,7 @@ function checkAuth() {
                     showMainApp();
                     loadTodayStats();
                     loadPendingOrders();
-                    startUserExistenceCheck();
+                    startUserExistenceCheck(); // start listener
                 } else {
                     logoutUser();
                     showToast('❌ Your account has been deleted. Please contact admin.', 'error');
@@ -145,37 +180,14 @@ function verifyUserExists(username) {
     return db.ref('users/' + username).once('value').then(snap => snap.exists());
 }
 
-let userCheckInterval = null;
-
-function startUserExistenceCheck() {
-    stopUserExistenceCheck();
-    userCheckInterval = setInterval(() => {
-        if (currentUser) {
-            verifyUserExists(currentUser.username).then(exists => {
-                if (!exists) {
-                    logoutUser();
-                    showToast('❌ Your account has been deleted. You have been logged out.', 'error');
-                    document.getElementById('authOverlay').style.display = 'flex';
-                    document.getElementById('mainApp').style.display = 'none';
-                }
-            }).catch(err => console.warn('User existence check error:', err));
-        }
-    }, 10000);
-}
-
-function stopUserExistenceCheck() {
-    if (userCheckInterval) {
-        clearInterval(userCheckInterval);
-        userCheckInterval = null;
-    }
-}
-
 function showMainApp() {
     document.getElementById('authOverlay').style.display = 'none';
     document.getElementById('mainApp').style.display = 'block';
     document.getElementById('userNameDisplay').textContent = currentUser.name || currentUser.username;
     setupOfflineDetection();
     lucide.createIcons();
+    // Start listener if not already started
+    startUserExistenceCheck();
 }
 
 // ==========================================
@@ -246,7 +258,7 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // ==========================================
-// ORIGINAL FUNCTIONS
+// ORIGINAL FUNCTIONS (unchanged from your original code)
 // ==========================================
 
 function setupOfflineDetection() {
