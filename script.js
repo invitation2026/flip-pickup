@@ -27,7 +27,6 @@ let scanMode = 'barcode';
 let pendingFilter = 'all';
 let allPendingOrders = [];
 let pendingDoneOrderId = null;
-
 let tesseractWorker = null;
 let ocrInterval = null;
 let isOcrScanning = false;
@@ -46,7 +45,6 @@ const rejectReasons = [
     { text: 'Phone is dead / not working', icon: 'battery-warning' },
     { text: 'Other reason', icon: 'more-horizontal' }
 ];
-
 const rescheduleReasons = [
     { text: 'On the way', icon: 'map-pin' },
     { text: 'Customer not picking call', icon: 'phone-missed' },
@@ -57,28 +55,31 @@ const rescheduleReasons = [
 ];
 
 // ==========================================
-// USER LISTENER (Real-time, no polling)
+// USER LISTENER (Real-time – delete/force logout)
 // ==========================================
 let userListenerRef = null;
 
 function startUserExistenceCheck() {
     if (!currentUser) return;
-    stopUserExistenceCheck(); // cleanup previous listener
+    stopUserExistenceCheck();
     const userRef = db.ref('users/' + currentUser.username);
     userRef.on('value', (snapshot) => {
         if (!snapshot.exists()) {
-            // User deleted by admin
             logoutUser();
-            showToast('❌ Your account has been deleted. You have been logged out.', 'error');
+            showToast('❌ Your account has been deleted. Logged out.', 'error');
             return;
         }
         const data = snapshot.val();
         if (data.forceLogout === true) {
-            // Admin forced logout
-            // Remove the flag so it doesn't trigger again
             userRef.update({ forceLogout: null }).catch(() => {});
             logoutUser();
             showToast('🔒 You have been logged out by admin.', 'info');
+        }
+        // Check if blocked
+        if (data.is_blocked === true) {
+            document.getElementById('blockedOverlay').style.display = 'flex';
+        } else {
+            document.getElementById('blockedOverlay').style.display = 'none';
         }
     });
     userListenerRef = userRef;
@@ -104,51 +105,45 @@ async function loginUser() {
         errorEl.style.display = 'block';
         return;
     }
-
     errorEl.style.display = 'none';
 
     try {
         const snap = await db.ref('users/' + username).once('value');
         if (!snap.exists()) {
-            errorEl.textContent = 'User not found. Please check your username.';
+            errorEl.textContent = 'User not found. Check username.';
             errorEl.style.display = 'block';
             return;
         }
         const userData = snap.val();
         if (userData.password !== password) {
-            errorEl.textContent = 'Incorrect password. Please try again.';
+            errorEl.textContent = 'Incorrect password.';
             errorEl.style.display = 'block';
             return;
         }
-
-        currentUser = {
-            username: username,
-            name: userData.name,
-            ...userData
-        };
+        currentUser = { username, name: userData.name, ...userData };
         localStorage.setItem('flipkart_agent_user', JSON.stringify(currentUser));
         showMainApp();
         showToast('✅ Welcome, ' + currentUser.name + '!', 'success');
-
+        // Check attendance after login
+        await checkAttendanceAndBlock();
         loadTodayStats();
         loadPendingOrders();
-
-        // Start real-time listener
+        loadAttendanceHistory();
         startUserExistenceCheck();
-
     } catch (e) {
-        console.error('Login error:', e);
-        errorEl.textContent = 'Something went wrong. Please try again.';
+        console.error(e);
+        errorEl.textContent = 'Something went wrong. Try again.';
         errorEl.style.display = 'block';
     }
 }
 
 function logoutUser() {
-    stopUserExistenceCheck(); // cleanup listener
+    stopUserExistenceCheck();
     localStorage.removeItem('flipkart_agent_user');
     currentUser = null;
     document.getElementById('mainApp').style.display = 'none';
     document.getElementById('authOverlay').style.display = 'flex';
+    document.getElementById('blockedOverlay').style.display = 'none';
     showToast('Logged out', 'info');
 }
 
@@ -157,15 +152,17 @@ function checkAuth() {
     if (stored) {
         try {
             currentUser = JSON.parse(stored);
-            verifyUserExists(currentUser.username).then(exists => {
+            verifyUserExists(currentUser.username).then(async exists => {
                 if (exists) {
                     showMainApp();
+                    await checkAttendanceAndBlock();
                     loadTodayStats();
                     loadPendingOrders();
-                    startUserExistenceCheck(); // start listener
+                    loadAttendanceHistory();
+                    startUserExistenceCheck();
                 } else {
                     logoutUser();
-                    showToast('❌ Your account has been deleted. Please contact admin.', 'error');
+                    showToast('❌ Account deleted. Please contact admin.', 'error');
                 }
             });
             return true;
@@ -186,12 +183,11 @@ function showMainApp() {
     document.getElementById('userNameDisplay').textContent = currentUser.name || currentUser.username;
     setupOfflineDetection();
     lucide.createIcons();
-    // Start listener if not already started
     startUserExistenceCheck();
 }
 
 // ==========================================
-// CHANGE PASSWORD (for agent)
+// CHANGE PASSWORD
 // ==========================================
 function showChangePassword() {
     if (!currentUser) return;
@@ -200,7 +196,7 @@ function showChangePassword() {
         html: `
             <p class="text-sm text-gray-600 mb-2">Change your login password</p>
             <input type="password" id="newPw" class="swal2-input" placeholder="New password" minlength="4">
-            <input type="password" id="confirmPw" class="swal2-input" placeholder="Confirm new password" minlength="4">
+            <input type="password" id="confirmPw" class="swal2-input" placeholder="Confirm" minlength="4">
         `,
         showCancelButton: true,
         confirmButtonText: 'Update Password',
@@ -208,59 +204,254 @@ function showChangePassword() {
         confirmButtonColor: '#4f46e5',
         cancelButtonColor: '#64748b',
         preConfirm: () => {
-            const newPw = document.getElementById('newPw').value;
-            const confirmPw = document.getElementById('confirmPw').value;
-            if (!newPw || newPw.length < 4) {
-                Swal.showValidationMessage('Password must be at least 4 characters');
-                return false;
-            }
-            if (newPw !== confirmPw) {
-                Swal.showValidationMessage('Passwords do not match');
-                return false;
-            }
-            return newPw;
+            const n = document.getElementById('newPw').value;
+            const c = document.getElementById('confirmPw').value;
+            if (!n || n.length < 4) { Swal.showValidationMessage('Min 4 chars'); return false; }
+            if (n !== c) { Swal.showValidationMessage('No match'); return false; }
+            return n;
         }
-    }).then(async (result) => {
-        if (result.isConfirmed) {
+    }).then(async (r) => {
+        if (r.isConfirmed) {
             try {
-                await db.ref('users/' + currentUser.username + '/password').set(result.value);
-                currentUser.password = result.value;
+                await db.ref('users/' + currentUser.username + '/password').set(r.value);
+                currentUser.password = r.value;
                 localStorage.setItem('flipkart_agent_user', JSON.stringify(currentUser));
-                showToast('✅ Password updated successfully', 'success');
-            } catch (e) {
-                showToast('Error updating password', 'error');
-                console.error(e);
-            }
+                showToast('✅ Password updated', 'success');
+            } catch (e) { showToast('Error', 'error'); }
         }
     });
 }
 
 // ==========================================
-// INIT
+// ATTENDANCE SYSTEM (Agent Side – No "Later" option)
 // ==========================================
-document.addEventListener('DOMContentLoaded', () => {
-    document.getElementById('offlineBanner').classList.add('hidden');
-    const loggedIn = checkAuth();
-    if (!loggedIn) {
-        document.getElementById('authOverlay').style.display = 'flex';
+async function checkAttendanceAndBlock() {
+    if (!currentUser) return;
+    const today = new Date().toISOString().split('T')[0];
+    // Check if user is blocked
+    const userSnap = await db.ref('users/' + currentUser.username + '/is_blocked').once('value');
+    if (userSnap.val() === true) {
+        showToast('🔒 You are blocked for today. Contact admin.', 'error');
+        document.getElementById('blockedOverlay').style.display = 'flex';
+        return;
     }
-    if (loggedIn) {
-        db.ref('pending').on('value', (snap) => {
-            loadPendingOrders();
-        });
+    // Check attendance
+    const attSnap = await db.ref('attendance/' + currentUser.username + '/' + today).once('value');
+    const att = attSnap.val();
+    if (att && att.status === 'present') {
+        // Already present
+        updateAttendanceUI('present');
+        return;
     }
-    document.getElementById('loginPassword').addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') loginUser();
+    if (att && att.status === 'absent' && att.blocked) {
+        document.getElementById('blockedOverlay').style.display = 'flex';
+        showToast('🔒 You are blocked for today.', 'error');
+        updateAttendanceUI('blocked');
+        return;
+    }
+    // Show Attendance Prompt (NO "Later" option)
+    showAttendancePrompt();
+}
+
+function showAttendancePrompt() {
+    Swal.fire({
+        title: '📋 Attendance',
+        text: 'Mark your attendance for today:',
+        icon: 'question',
+        showDenyButton: true,
+        showCancelButton: false,  // NO "Later" option
+        confirmButtonText: '✅ Present',
+        denyButtonText: '❌ Not Present',
+        confirmButtonColor: '#059669',
+        denyButtonColor: '#dc2626',
+        allowOutsideClick: false,
+        allowEscapeKey: false
+    }).then(async (result) => {
+        if (result.isConfirmed) {
+            // Present -> ask for OTP
+            await promptOTP();
+        } else if (result.isDenied) {
+            // Not Present -> ask reason and block
+            const { value: reason, isConfirmed } = await Swal.fire({
+                title: 'Are you sure?',
+                text: 'If you are not present, you will be BLOCKED for the full day. Salary will be deducted (unless admin unblocks with pay).',
+                input: 'text',
+                inputPlaceholder: 'Reason for absence...',
+                showCancelButton: true,
+                confirmButtonText: 'Yes, Block Me',
+                cancelButtonText: 'Cancel',
+                confirmButtonColor: '#dc2626',
+                cancelButtonColor: '#64748b'
+            });
+            if (isConfirmed && reason) {
+                await markAbsent(reason);
+            } else {
+                // If cancelled, ask again (no "Later")
+                showAttendancePrompt();
+            }
+        }
     });
-    document.getElementById('loginUsername').addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') document.getElementById('loginPassword').focus();
+}
+
+async function promptOTP() {
+    const { value: otp, isConfirmed } = await Swal.fire({
+        title: '🔐 Enter OTP',
+        text: 'Please enter the OTP provided by admin for today.',
+        input: 'text',
+        inputPlaceholder: '6-digit OTP',
+        inputAttributes: { maxlength: 6, inputmode: 'numeric' },
+        showCancelButton: true,
+        confirmButtonText: 'Verify',
+        cancelButtonText: 'Cancel',
+        confirmButtonColor: '#4f46e5',
+        cancelButtonColor: '#64748b'
     });
-});
+    if (!isConfirmed) {
+        showToast('Attendance cancelled. Please login again.', 'info');
+        logoutUser();
+        return;
+    }
+    // Verify OTP
+    const today = new Date().toISOString().split('T')[0];
+    const otpSnap = await db.ref('daily_otp/' + today + '/' + currentUser.username).once('value');
+    const otpData = otpSnap.val();
+    if (!otpData || otpData.otp !== otp) {
+        await Swal.fire({ icon: 'error', title: 'Invalid OTP', text: 'Please try again.', confirmButtonColor: '#dc2626' });
+        promptOTP();
+        return;
+    }
+    // Mark Present
+    await db.ref('attendance/' + currentUser.username + '/' + today).set({
+        status: 'present',
+        timestamp: Date.now(),
+        otp_used: otp,
+        blocked: false,
+        salary_counted: true
+    });
+    showToast('✅ Attendance marked present!', 'success');
+    updateAttendanceUI('present');
+    loadAttendanceHistory();
+}
+
+async function markAbsent(reason) {
+    const today = new Date().toISOString().split('T')[0];
+    await db.ref('attendance/' + currentUser.username + '/' + today).set({
+        status: 'absent',
+        reason: reason,
+        timestamp: Date.now(),
+        blocked: true,
+        salary_counted: false
+    });
+    await db.ref('users/' + currentUser.username + '/is_blocked').set(true);
+    showToast('🔒 You have been blocked for the day.', 'error');
+    document.getElementById('blockedOverlay').style.display = 'flex';
+    updateAttendanceUI('blocked');
+    loadAttendanceHistory();
+}
+
+async function verifyOTP() {
+    const otpInput = document.getElementById('otpInput');
+    const otp = otpInput.value.trim();
+    if (!otp || otp.length < 6) {
+        showToast('Please enter 6-digit OTP', 'error');
+        return;
+    }
+    const today = new Date().toISOString().split('T')[0];
+    const otpSnap = await db.ref('daily_otp/' + today + '/' + currentUser.username).once('value');
+    const otpData = otpSnap.val();
+    if (!otpData || otpData.otp !== otp) {
+        showToast('❌ Invalid OTP. Try again.', 'error');
+        return;
+    }
+    // Mark Present
+    await db.ref('attendance/' + currentUser.username + '/' + today).set({
+        status: 'present',
+        timestamp: Date.now(),
+        otp_used: otp,
+        blocked: false,
+        salary_counted: true
+    });
+    showToast('✅ Attendance marked present!', 'success');
+    updateAttendanceUI('present');
+    loadAttendanceHistory();
+    document.getElementById('otpInput').value = '';
+}
+
+async function refreshOTP() {
+    if (!currentUser) return;
+    const today = new Date().toISOString().split('T')[0];
+    const otpSnap = await db.ref('daily_otp/' + today + '/' + currentUser.username).once('value');
+    const otpData = otpSnap.val();
+    if (otpData && otpData.otp) {
+        showToast('Your OTP: ' + otpData.otp, 'info');
+    } else {
+        showToast('No OTP generated for today. Contact admin.', 'error');
+    }
+}
+
+function updateAttendanceUI(status) {
+    const box = document.getElementById('attendanceStatusBox');
+    const statusEl = box.querySelector('.attendance-status');
+    const msgEl = box.querySelector('p');
+    if (status === 'present') {
+        statusEl.textContent = '✅ Present';
+        statusEl.className = 'attendance-status present';
+        msgEl.textContent = 'You have marked your attendance today.';
+    } else if (status === 'blocked') {
+        statusEl.textContent = '🚫 Blocked';
+        statusEl.className = 'attendance-status blocked';
+        msgEl.textContent = 'You are blocked for today. Contact admin.';
+    } else {
+        statusEl.textContent = 'Not Marked';
+        statusEl.className = 'attendance-status not-marked';
+        msgEl.textContent = 'Please enter the OTP to mark your attendance';
+    }
+}
+
+async function loadAttendanceHistory() {
+    if (!currentUser) return;
+    const container = document.getElementById('attendanceHistory');
+    container.innerHTML = '<div class="text-sm text-gray-400 text-center">Loading...</div>';
+    try {
+        const today = new Date();
+        let html = '';
+        for (let i = 0; i < 7; i++) {
+            const d = new Date(today);
+            d.setDate(d.getDate() - i);
+            const dateStr = d.toISOString().split('T')[0];
+            const attSnap = await db.ref('attendance/' + currentUser.username + '/' + dateStr).once('value');
+            const att = attSnap.val() || {};
+            const status = att.status || 'Not Marked';
+            let statusClass = 'not-marked';
+            let displayStatus = '—';
+            if (status === 'present') { statusClass = 'present'; displayStatus = '✅ Present'; }
+            else if (status === 'absent' && att.blocked) { statusClass = 'blocked'; displayStatus = '🚫 Blocked'; }
+            else if (status === 'absent') { statusClass = 'absent'; displayStatus = '❌ Absent'; }
+            const displayDate = d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+            html += `<div class="day-item"><span class="date">${displayDate}</span><span class="status ${statusClass}">${displayStatus}</span></div>`;
+        }
+        container.innerHTML = html || '<div class="text-sm text-gray-400">No history</div>';
+    } catch (e) {
+        container.innerHTML = '<div class="text-sm text-red-500">Error loading history</div>';
+    }
+}
 
 // ==========================================
-// ORIGINAL FUNCTIONS (unchanged from your original code)
+// TAB SWITCHING
 // ==========================================
+function switchTab(tab) {
+    document.querySelectorAll('#mainTabBar button').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.tab === tab);
+    });
+    document.querySelectorAll('.tab-content').forEach(el => el.style.display = 'none');
+    document.getElementById('tab-' + tab).style.display = 'block';
+    if (tab === 'pending') loadPendingOrders();
+    if (tab === 'attendance') { loadAttendanceHistory(); updateAttendanceUI(); }
+}
 
+// ==========================================
+// OFFLINE DETECTION
+// ==========================================
 function setupOfflineDetection() {
     const updateStatus = () => {
         const isOnline = navigator.onLine;
@@ -279,13 +470,15 @@ function setupOfflineDetection() {
     updateStatus();
 }
 
+// ==========================================
+// TODAY'S STATS
+// ==========================================
 async function loadTodayStats() {
     if (!currentUser) return;
     try {
         const today = new Date().toDateString();
         const snapshot = await db.ref('pickups').once('value');
         const data = snapshot.val() || {};
-
         let pickup = 0, reject = 0, reschedule = 0;
         Object.values(data).forEach(item => {
             if (item.agent === currentUser.username && new Date(item.timestamp).toDateString() === today) {
@@ -294,50 +487,42 @@ async function loadTodayStats() {
                 else if (item.status === 'reschedule') reschedule++;
             }
         });
-
         document.getElementById('statPickup').textContent = pickup;
         document.getElementById('statReject').textContent = reject;
         document.getElementById('statReschedule').textContent = reschedule;
-    } catch (e) {
-        console.log('Stats error:', e);
-    }
+    } catch (e) { console.log(e); }
 }
 
+// ==========================================
+// PENDING ORDERS
+// ==========================================
 async function loadPendingOrders() {
     if (!currentUser) return;
     try {
         const snapshot = await db.ref('pending').once('value');
         const data = snapshot.val() || {};
         allPendingOrders = [];
-
         for (const [orderId, item] of Object.entries(data)) {
             if (item.agent === currentUser.username) {
-                allPendingOrders.push({
-                    orderId,
-                    ...item
-                });
+                allPendingOrders.push({ orderId, ...item });
             }
         }
-
-        allPendingOrders.sort((a, b) => {
-            return (b.timestamp || 0) - (a.timestamp || 0);
-        });
-
+        allPendingOrders.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
         renderPendingList();
-        updatePendingCount();
-
+        updatePendingCounts();
     } catch (e) {
-        console.log('Pending load error:', e);
-        document.getElementById('pendingList').innerHTML =
-            '<div class="pending-empty"><i data-lucide="alert-circle"></i><p class="text-sm font-medium text-red-500">Error loading pending</p></div>';
+        console.log(e);
+        document.getElementById('pendingList').innerHTML = '<div class="pending-empty"><i data-lucide="alert-circle"></i><p class="text-sm font-medium text-red-500">Error loading</p></div>';
         lucide.createIcons();
     }
 }
 
-function updatePendingCount() {
+function updatePendingCounts() {
     const count = allPendingOrders.length;
     document.getElementById('pendingCountBadge').textContent = count;
+    document.getElementById('pendingCountBadgeMain').textContent = count;
     document.getElementById('pendingCountBadge').style.display = count > 0 ? 'inline-block' : 'none';
+    document.getElementById('pendingCountBadgeMain').style.display = count > 0 ? 'inline-block' : 'none';
 }
 
 function setPendingFilter(filter) {
@@ -351,13 +536,9 @@ function setPendingFilter(filter) {
 function renderPendingList() {
     const container = document.getElementById('pendingList');
     let filtered = [...allPendingOrders];
-
     if (pendingFilter === 'onway') {
-        filtered = filtered.filter(item =>
-            item.reason && item.reason.toLowerCase().includes('on the way')
-        );
+        filtered = filtered.filter(item => item.reason && item.reason.toLowerCase().includes('on the way'));
     }
-
     if (filtered.length === 0) {
         const msg = pendingFilter === 'onway' ? 'No "On the way" orders' : 'No pending orders';
         container.innerHTML = `
@@ -370,7 +551,6 @@ function renderPendingList() {
         lucide.createIcons();
         return;
     }
-
     let html = '';
     filtered.forEach(item => {
         const isOnWay = item.reason && item.reason.toLowerCase().includes('on the way');
@@ -378,7 +558,6 @@ function renderPendingList() {
         const time = item.timestampIST || item.timestamp || '';
         const reason = item.reason || '—';
         const model = item.phoneModel || '—';
-
         html += `
             <div class="pending-item glass rounded-xl p-4 mb-3 shadow">
                 <div class="flex items-start justify-between">
@@ -388,14 +567,8 @@ function renderPendingList() {
                             ${badge}
                             <span class="text-xs text-gray-400">(${model})</span>
                         </div>
-                        <p class="text-xs text-gray-500 mt-1 flex items-center gap-1">
-                            <i data-lucide="message-circle" class="w-3 h-3"></i>
-                            ${reason}
-                        </p>
-                        <p class="text-xs text-gray-400 mt-0.5 flex items-center gap-1">
-                            <i data-lucide="clock" class="w-3 h-3"></i>
-                            ${time}
-                        </p>
+                        <p class="text-xs text-gray-500 mt-1"><i data-lucide="message-circle" class="w-3 h-3 inline"></i> ${reason}</p>
+                        <p class="text-xs text-gray-400 mt-0.5"><i data-lucide="clock" class="w-3 h-3 inline"></i> ${time}</p>
                     </div>
                     <button onclick="markPendingDone('${item.orderId}')" class="done-btn flex-shrink-0 ml-3">
                         <i data-lucide="check-circle"></i> Done
@@ -404,7 +577,6 @@ function renderPendingList() {
             </div>
         `;
     });
-
     container.innerHTML = html;
     lucide.createIcons();
 }
@@ -412,10 +584,14 @@ function renderPendingList() {
 function markPendingDone(orderId) {
     pendingDoneOrderId = orderId;
     document.getElementById('orderId').value = orderId;
+    switchTab('pickup');
     showForm('pickup');
     showToast(`📦 Pending order ${orderId} — fill pickup details`, 'info');
 }
 
+// ==========================================
+// PASTE ORDER ID
+// ==========================================
 async function pasteOrderId() {
     try {
         const text = await navigator.clipboard.readText();
@@ -427,30 +603,20 @@ async function pasteOrderId() {
 }
 
 // ==========================================
-// SHOW FORM — with model field for reject & reschedule
+// SHOW FORM
 // ==========================================
 function showForm(status) {
     let orderId = document.getElementById('orderId').value.trim().toUpperCase();
-
     if (!orderId && pendingDoneOrderId) {
         orderId = pendingDoneOrderId;
         document.getElementById('orderId').value = orderId;
     }
-
     if (!orderId) {
-        Swal.fire({
-            icon: 'warning',
-            title: 'Order ID Missing',
-            text: 'Please enter the Order ID first',
-            confirmButtonColor: '#3b82f6',
-            timer: 2000
-        });
+        Swal.fire({ icon: 'warning', title: 'Order ID Missing', text: 'Please enter the Order ID first', confirmButtonColor: '#3b82f6' });
         document.getElementById('orderId').focus();
         return;
     }
-
     pendingDoneOrderId = null;
-
     currentStatus = status;
     selectedReason = '';
     hiddenImei2 = '';
@@ -463,7 +629,6 @@ function showForm(status) {
     const formSubtitle = document.getElementById('formSubtitle');
     const formIcon = document.getElementById('formIcon');
     const submitBtn = document.getElementById('submitBtn');
-
     formFields.innerHTML = '';
 
     if (status === 'pickup') {
@@ -472,7 +637,6 @@ function showForm(status) {
         formIcon.className = "w-12 h-12 rounded-xl flex items-center justify-center bg-gradient-to-br from-green-500 to-emerald-600";
         formIcon.innerHTML = '<i data-lucide="check-circle-2" class="w-7 h-7 text-white"></i>';
         submitBtn.className = 'btn-bounce w-full bg-gradient-to-r from-green-500 to-emerald-600 text-white p-4 rounded-2xl font-bold text-lg shadow-xl flex items-center justify-center gap-2';
-
         formFields.innerHTML = `
             <div>
                 <label class="text-xs font-bold text-gray-500 mb-1.5 block">PHONE MODEL *</label>
@@ -506,13 +670,11 @@ function showForm(status) {
     } else {
         const reasons = (status === 'rejected') ? rejectReasons : rescheduleReasons;
         const isReject = status === 'rejected';
-
         formTitle.innerText = isReject ? "Rejection Reason" : "Reschedule / Pending";
         formSubtitle.innerText = isReject ? "Select the most appropriate reason" : "Select reason — 'On the way' means you're heading there";
         formIcon.className = `w-12 h-12 rounded-xl flex items-center justify-center bg-gradient-to-br ${isReject ? 'from-red-500 to-rose-600' : 'from-amber-500 to-orange-600'}`;
         formIcon.innerHTML = `<i data-lucide="${isReject ? 'x-circle' : 'clock'}" class="w-7 h-7 text-white"></i>`;
         submitBtn.className = `btn-bounce w-full bg-gradient-to-r ${isReject ? 'from-red-500 to-rose-600' : 'from-amber-500 to-orange-600'} text-white p-4 rounded-2xl font-bold text-lg shadow-xl flex items-center justify-center gap-2`;
-
         let reasonsHtml = `
             <div>
                 <label class="text-xs font-bold text-gray-500 mb-1.5 block">PHONE MODEL *</label>
@@ -533,15 +695,11 @@ function showForm(status) {
         reasonsHtml += '</div>';
         reasonsHtml += '<input type="text" id="otherReason" placeholder="Type your reason here..." class="input-field w-full p-3.5 rounded-xl outline-none hidden mt-3">';
         formFields.innerHTML = reasonsHtml;
-
         setTimeout(() => {
             const firstBtn = document.querySelector('.reason-btn');
-            if (firstBtn) {
-                selectReason(firstBtn, firstBtn.dataset.reason);
-            }
+            if (firstBtn) selectReason(firstBtn, firstBtn.dataset.reason);
         }, 100);
     }
-
     lucide.createIcons();
     window.scrollTo({ top: 0, behavior: 'smooth' });
 }
@@ -556,7 +714,6 @@ function selectReason(btn, reason) {
     document.querySelectorAll('.reason-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     selectedReason = reason;
-
     const otherInput = document.getElementById('otherReason');
     if (reason.toLowerCase().includes('other')) {
         otherInput.classList.remove('hidden');
@@ -567,7 +724,215 @@ function selectReason(btn, reason) {
 }
 
 // ==========================================
-// SCAN MODE TOGGLE
+// SUBMIT DATA
+// ==========================================
+async function submitData() {
+    if (!currentUser) {
+        showToast('Please login first', 'error');
+        return;
+    }
+    // Check if blocked
+    const userSnap = await db.ref('users/' + currentUser.username + '/is_blocked').once('value');
+    if (userSnap.val() === true) {
+        showToast('🔒 You are blocked for today!', 'error');
+        return;
+    }
+
+    const orderId = document.getElementById('orderId').value.trim().toUpperCase();
+    let existingData = null, exists = false;
+    try {
+        const existingSnap = await db.ref('pickups/' + orderId).once('value');
+        exists = existingSnap.exists();
+        if (exists) existingData = existingSnap.val();
+    } catch (e) {
+        console.error(e);
+        showToast('Error checking order', 'error');
+        return;
+    }
+
+    // Password required for rejected -> pickup
+    if (exists && existingData.status === 'rejected' && currentStatus === 'pickup') {
+        const { value: password, isConfirmed } = await Swal.fire({
+            title: '🔐 Admin Password Required',
+            html: `
+                <p class="text-sm text-gray-600 mb-2">This order was previously <span class="text-red-600 font-bold">REJECTED</span>.</p>
+                <p class="text-sm text-gray-600 mb-2">Enter admin password to mark as <span class="text-green-600 font-bold">PICKUP COMPLETED</span>.</p>
+                <p class="text-xs text-gray-400 mt-2">Only admin knows this password.</p>
+            `,
+            input: 'password',
+            inputPlaceholder: 'Enter admin password',
+            inputAttributes: { autocapitalize: 'off', autocorrect: 'off' },
+            showCancelButton: true,
+            confirmButtonColor: '#3b82f6',
+            cancelButtonColor: '#dc2626',
+            confirmButtonText: '✅ Verify & Proceed',
+            cancelButtonText: 'Cancel',
+            allowOutsideClick: false,
+            preConfirm: (input) => { if (!input) { Swal.showValidationMessage('Enter password'); return false; } return input; }
+        });
+        if (!isConfirmed) { showToast('Cancelled', 'error'); return; }
+        if (password !== 'admin123') {
+            Swal.fire({ icon: 'error', title: 'Wrong Password', text: 'Invalid admin password.', confirmButtonColor: '#dc2626' });
+            return;
+        }
+        showToast('✅ Password verified!', 'success');
+    }
+
+    // Duplicate pickup prevention
+    if (exists && existingData.status === 'pickup' && currentStatus === 'pickup') {
+        Swal.fire({ icon: 'error', title: 'Already Pickup Completed', text: `Order ${orderId} already marked.`, confirmButtonColor: '#3b82f6' });
+        return;
+    }
+
+    const now = new Date();
+    const istDateTime = getISTDateTime();
+    let dbData = {
+        orderId,
+        status: currentStatus,
+        timestamp: now.toISOString(),
+        timestampIST: istDateTime,
+        date: now.toLocaleDateString('en-IN'),
+        time: now.toLocaleTimeString('en-IN'),
+        agent: currentUser.username
+    };
+    let whatsappMsg = '';
+
+    if (currentStatus === 'pickup') {
+        const phoneModel = document.getElementById('phoneModel').value.trim();
+        const imei = document.getElementById('imei').value.trim();
+        const value = document.getElementById('value').value.trim();
+        const custName = document.getElementById('custName').value.trim();
+        if (!phoneModel || !imei || !value) {
+            Swal.fire({ icon: 'error', title: 'Missing Details', text: 'Fill Model, IMEI, Value', confirmButtonColor: '#3b82f6' });
+            return;
+        }
+        dbData.phoneModel = phoneModel;
+        dbData.imei = imei;
+        if (hiddenImei2) dbData.imei2 = hiddenImei2;
+        dbData.value = parseInt(value);
+        dbData.customerName = custName || 'N/A';
+        whatsappMsg = `Order ID: ${orderId}\nStatus: Pickup Completed`;
+    } else {
+        const phoneModel = document.getElementById('phoneModelRejectReschedule').value.trim();
+        if (!phoneModel) {
+            Swal.fire({ icon: 'error', title: 'Missing Model', text: 'Enter phone model', confirmButtonColor: '#3b82f6' });
+            return;
+        }
+        dbData.phoneModel = phoneModel;
+        let reason = selectedReason;
+        if (reason.toLowerCase().includes('other')) {
+            reason = document.getElementById('otherReason').value.trim();
+            if (!reason) {
+                Swal.fire({ icon: 'warning', title: 'Reason Required', text: 'Type the reason', confirmButtonColor: '#3b82f6' });
+                return;
+            }
+        }
+        if (!reason) {
+            Swal.fire({ icon: 'warning', title: 'Select Reason', text: 'Choose a reason', confirmButtonColor: '#3b82f6' });
+            return;
+        }
+        dbData.reason = reason;
+        if (currentStatus === 'rejected') {
+            whatsappMsg = `Order ID: ${orderId}\nStatus: Rejected\nModel: ${phoneModel}\nReason: ${reason}`;
+            dbData.incentive_approved = false;
+            dbData.incentive_paid = false;
+        } else {
+            whatsappMsg = `Order ID: ${orderId}\nModel: ${phoneModel}\nReason: ${reason}`;
+        }
+    }
+
+    if (currentStatus === 'reschedule') {
+        try {
+            const pendingSnap = await db.ref('pending/' + orderId).once('value');
+            if (pendingSnap.exists()) {
+                const existingReason = pendingSnap.val().reason || '';
+                if (existingReason !== dbData.reason) {
+                    const r = await Swal.fire({
+                        title: 'Change Reason?',
+                        text: `Existing: "${existingReason}". Update to "${dbData.reason}"?`,
+                        icon: 'question',
+                        showCancelButton: true,
+                        confirmButtonColor: '#f59e0b',
+                        confirmButtonText: 'Update',
+                        cancelButtonText: 'Cancel'
+                    });
+                    if (!r.isConfirmed) { showToast('Cancelled', 'error'); return; }
+                }
+            }
+        } catch (e) { console.error(e); }
+    }
+
+    Swal.fire({ title: 'Saving...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+    try {
+        if (exists) await db.ref('pickups/' + orderId).update(dbData);
+        else await db.ref('pickups/' + orderId).set(dbData);
+
+        if (currentStatus === 'pickup' || currentStatus === 'rejected') {
+            const pendingSnap = await db.ref('pending/' + orderId).once('value');
+            if (pendingSnap.exists()) {
+                await db.ref('pending/' + orderId).remove();
+                await loadPendingOrders();
+            }
+        }
+        if (currentStatus === 'reschedule') {
+            const pendingData = {
+                orderId,
+                phoneModel: dbData.phoneModel,
+                reason: dbData.reason || selectedReason,
+                status: 'reschedule',
+                timestamp: now.toISOString(),
+                timestampIST: istDateTime,
+                agent: currentUser.username
+            };
+            await db.ref('pending/' + orderId).set(pendingData);
+            await loadPendingOrders();
+        }
+
+        const result = await Swal.fire({
+            icon: 'success',
+            title: '✅ Saved!',
+            html: `
+                <p class="text-sm text-gray-600 mb-2">📊 Firebase me time save ho gaya:</p>
+                <div class="text-left bg-blue-50 p-2 rounded-lg text-xs font-mono mb-3">${istDateTime}</div>
+                <p class="text-sm text-gray-600 mb-2">📱 WhatsApp message (no time):</p>
+                <div class="text-left bg-gray-50 p-3 rounded-lg text-xs font-mono whitespace-pre-wrap">${whatsappMsg}</div>
+            `,
+            showCancelButton: true,
+            showDenyButton: true,
+            confirmButtonText: '📤 Open WhatsApp',
+            denyButtonText: '📋 Copy Message',
+            cancelButtonText: 'Close',
+            confirmButtonColor: '#25D366',
+            denyButtonColor: '#3b82f6'
+        });
+        if (result.isConfirmed) {
+            window.open(`https://wa.me/?text=${encodeURIComponent(whatsappMsg)}`, '_blank');
+        } else if (result.isDenied) {
+            try {
+                await navigator.clipboard.writeText(whatsappMsg);
+                showToast('✅ Copied!', 'success');
+            } catch (e) {
+                const ta = document.createElement('textarea');
+                ta.value = whatsappMsg;
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                document.body.removeChild(ta);
+                showToast('✅ Copied!', 'success');
+            }
+        }
+        document.getElementById('orderId').value = '';
+        hiddenImei2 = '';
+        goBack();
+        loadTodayStats();
+        loadPendingOrders();
+    } catch (error) {
+        Swal.fire({ icon: 'error', title: 'Error', text: error.message });
+    }
+}
+
+// ==========================================
+// SCANNER FUNCTIONS (Barcode + OCR)
 // ==========================================
 function setScanMode(mode) {
     scanMode = mode;
@@ -577,15 +942,14 @@ function setScanMode(mode) {
     const hint = document.getElementById('scanHint');
     const tip = document.getElementById('scanTip');
     const captureBtn = document.getElementById('captureBtn');
-
     if (mode === 'barcode') {
         hint.textContent = '📱 Barcode ko box me align karo';
-        tip.innerHTML = '<strong>💡 Tip:</strong> Phone box ya back panel pe IMEI barcode hota hai. Usko scan karo. Fatafat ho jaega!';
+        tip.innerHTML = '<strong>💡 Tip:</strong> Phone box ya back panel pe IMEI barcode hota hai.';
         captureBtn.style.display = 'none';
         document.getElementById('imeiResult').classList.remove('show');
     } else {
-        hint.textContent = '📱 *#06# screen dikhao — phir Capture dabao, auto detect ho jaega';
-        tip.innerHTML = '<strong>💡 Tip:</strong> Phone me *#06# dial karo, IMEI screen dikhao. <strong>Capture</strong> dabao — background scan start ho jaega, IMEI detect hote hi fill ho jaega!';
+        hint.textContent = '📱 *#06# screen dikhao — phir Capture dabao';
+        tip.innerHTML = '<strong>💡 Tip:</strong> Phone me *#06# dial karo, IMEI screen dikhao.';
         captureBtn.style.display = 'flex';
         document.getElementById('imeiResult').classList.remove('show');
         captureBtn.disabled = false;
@@ -595,16 +959,9 @@ function setScanMode(mode) {
     lucide.createIcons();
 }
 
-// ==========================================
-// TESSERACT INIT
-// ==========================================
 async function initTesseract() {
-    if (typeof Tesseract === 'undefined') {
-        console.warn('⚠️ Tesseract.js not loaded');
-        return null;
-    }
+    if (typeof Tesseract === 'undefined') { console.warn('Tesseract not loaded'); return null; }
     try {
-        console.log('🔄 Initializing Tesseract OCR...');
         const worker = await Tesseract.createWorker('eng', 1, {
             logger: m => {
                 if (m.status === 'recognizing text') {
@@ -616,65 +973,40 @@ async function initTesseract() {
         await worker.setParameters({
             tessedit_char_whitelist: '0123456789IMEI: ',
             tessedit_pageseg_mode: '6',
-            tessedit_ocr_engine_mode: '3',
+            tessedit_ocr_engine_mode: '3'
         });
-        console.log('✅ Tesseract ready');
         return worker;
-    } catch (e) {
-        console.error('❌ Tesseract init error:', e);
-        return null;
-    }
+    } catch (e) { console.error(e); return null; }
 }
 
-// ==========================================
-// START SCANNER
-// ==========================================
 async function startScanner() {
     const modal = document.getElementById('scannerModal');
     const video = document.getElementById('scanVideo');
     const statusText = document.getElementById('scanStatusText');
     const spinner = document.getElementById('scanSpinner');
-
     modal.classList.remove('hidden');
     statusText.textContent = '🔄 Starting camera...';
     spinner.style.display = 'inline-block';
     lucide.createIcons();
-
     document.getElementById('imeiResult').classList.remove('show');
     document.getElementById('ocrProgress').style.display = 'none';
     document.getElementById('ocrProgressBar').style.width = '0%';
-
-    if (scanMode === 'ocr') {
-        tesseractWorker = await initTesseract();
-    }
-
+    if (scanMode === 'ocr') { tesseractWorker = await initTesseract(); }
     try {
-        if (typeof ZXing === 'undefined' || !ZXing.BrowserMultiFormatReader) {
-            throw new Error('ZXing library not loaded');
-        }
-
+        if (typeof ZXing === 'undefined' || !ZXing.BrowserMultiFormatReader) throw new Error('ZXing not loaded');
         const hints = new Map();
         const formats = [
-            ZXing.BarcodeFormat.CODE_128,
-            ZXing.BarcodeFormat.CODE_39,
-            ZXing.BarcodeFormat.EAN_13,
-            ZXing.BarcodeFormat.EAN_8,
-            ZXing.BarcodeFormat.UPC_A,
-            ZXing.BarcodeFormat.UPC_E,
-            ZXing.BarcodeFormat.ITF,
-            ZXing.BarcodeFormat.QR_CODE,
-            ZXing.BarcodeFormat.DATA_MATRIX,
-            ZXing.BarcodeFormat.CODE_93
+            ZXing.BarcodeFormat.CODE_128, ZXing.BarcodeFormat.CODE_39,
+            ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.EAN_8,
+            ZXing.BarcodeFormat.UPC_A, ZXing.BarcodeFormat.UPC_E,
+            ZXing.BarcodeFormat.ITF, ZXing.BarcodeFormat.QR_CODE,
+            ZXing.BarcodeFormat.DATA_MATRIX, ZXing.BarcodeFormat.CODE_93
         ];
         hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, formats);
         hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
         hints.set(ZXing.DecodeHintType.CHARACTER_SET, 'UTF-8');
-
         zxingCodeReader = new ZXing.BrowserMultiFormatReader(hints);
-
         const devices = await zxingCodeReader.listVideoInputDevices();
-        console.log('📷 Cameras:', devices);
-
         let deviceId = null;
         for (const d of devices) {
             if (d.label && /back|rear|environment/i.test(d.label)) {
@@ -682,33 +1014,24 @@ async function startScanner() {
                 break;
             }
         }
-        if (!deviceId && devices.length > 0) {
-            deviceId = devices[devices.length - 1].deviceId;
-        }
-
+        if (!deviceId && devices.length > 0) deviceId = devices[devices.length - 1].deviceId;
         statusText.textContent = '📷 Camera ready';
-
         await zxingCodeReader.decodeFromVideoDevice(
             deviceId,
             'scanVideo',
             (result, err) => {
                 if (result && scanMode === 'barcode') {
                     const raw = result.getText();
-                    console.log('✅ Barcode:', raw);
                     const imeis = extractIMEIs(raw);
-                    if (imeis.imei1 && imeis.imei1.length >= 14) {
-                        onScanSuccess(imeis.imei1, imeis.imei2);
-                    }
+                    if (imeis.imei1 && imeis.imei1.length >= 14) onScanSuccess(imeis.imei1, imeis.imei2);
                 } else if (err && !(err instanceof ZXing.NotFoundException)) {
-                    console.error('Scan error:', err);
+                    console.error(err);
                 }
             }
         );
-
         isScanning = true;
-        statusText.textContent = scanMode === 'barcode' ? '🎯 Scanning barcode...' : '📱 Ready — tap Capture';
+        statusText.textContent = scanMode === 'barcode' ? '🎯 Scanning...' : '📱 Ready';
         spinner.style.display = 'none';
-
         if (scanMode === 'ocr') {
             document.getElementById('captureBtn').style.display = 'flex';
             document.getElementById('captureBtn').disabled = false;
@@ -717,84 +1040,49 @@ async function startScanner() {
         } else {
             document.getElementById('captureBtn').style.display = 'none';
         }
-
-        const tip = document.getElementById('scanTip');
-        if (scanMode === 'barcode') {
-            tip.innerHTML = '<strong>💡 Tip:</strong> Phone box ya back panel pe IMEI barcode hota hai. Auto scan ho jaega!';
-        } else {
-            tip.innerHTML = '<strong>💡 Tip:</strong> Phone me *#06# dial karo, IMEI screen dikhao. <strong>Capture</strong> dabao — background scan start ho jaega, IMEI detect hote hi fill ho jaega!';
-        }
-
     } catch (err) {
-        console.error('Scanner error:', err);
+        console.error(err);
         stopScanner();
         let msg = 'Camera access failed';
-        if (err.name === 'NotAllowedError') msg = 'Please allow camera permission in browser settings';
-        else if (err.name === 'NotFoundError') msg = 'No camera found on this device';
-        else if (err.name === 'NotSecureError' || window.location.protocol === 'file:') {
-            msg = 'Camera needs HTTPS. Host this page online (Netlify/Vercel).';
-        } else if (err.message && err.message.includes('ZXing')) {
-            msg = 'Scanner library failed to load. Check internet.';
-        }
-        Swal.fire({ icon: 'error', title: 'Camera Error', text: msg, confirmButtonColor: '#3b82f6' });
+        if (err.name === 'NotAllowedError') msg = 'Allow camera permission';
+        else if (err.name === 'NotFoundError') msg = 'No camera found';
+        else if (err.name === 'NotSecureError' || window.location.protocol === 'file:') msg = 'Camera needs HTTPS.';
+        Swal.fire({ icon: 'error', title: 'Camera Error', text: msg });
     }
 }
 
-// ==========================================
-// START OCR SCANNING
-// ==========================================
 async function startOCRScanning() {
-    if (scanMode !== 'ocr') return;
-    if (isOcrScanning) {
-        showToast('Already scanning...', 'info');
-        return;
-    }
-
+    if (scanMode !== 'ocr' || isOcrScanning) return;
     if (!tesseractWorker) {
         showToast('⏳ Initializing OCR...', 'info');
         tesseractWorker = await initTesseract();
-        if (!tesseractWorker) {
-            showToast('❌ OCR initialization failed', 'error');
-            return;
-        }
+        if (!tesseractWorker) { showToast('❌ OCR failed', 'error'); return; }
     }
-
     const video = document.getElementById('scanVideo');
-    if (!video.videoWidth || video.videoWidth === 0) {
-        showToast('⏳ Camera not ready', 'error');
-        return;
-    }
-
+    if (!video.videoWidth) { showToast('⏳ Camera not ready', 'error'); return; }
     isOcrScanning = true;
     lastDetectedImei = '';
     ocrAttemptCount = 0;
-
     const captureBtn = document.getElementById('captureBtn');
     captureBtn.disabled = true;
     captureBtn.innerHTML = '<span class="spinner" style="width:20px;height:20px;border-width:2px;"></span> Scanning...';
-
     const statusText = document.getElementById('scanStatusText');
     const progress = document.getElementById('ocrProgress');
     const progressBar = document.getElementById('ocrProgressBar');
     progress.style.display = 'block';
     progressBar.style.width = '0%';
-
-    statusText.textContent = '📸 Capturing & scanning...';
+    statusText.textContent = '📸 Capturing...';
 
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
     const maxW = 800;
     const scale = Math.min(1, maxW / video.videoWidth);
-    const w = Math.round(video.videoWidth * scale);
-    const h = Math.round(video.videoHeight * scale);
-    canvas.width = w;
-    canvas.height = h;
-
+    canvas.width = Math.round(video.videoWidth * scale);
+    canvas.height = Math.round(video.videoHeight * scale);
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(video, 0, 0, w, h);
-
-    const imgData = ctx.getImageData(0, 0, w, h);
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
     const d = imgData.data;
     for (let i = 0; i < d.length; i += 4) {
         const gray = d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114;
@@ -806,48 +1094,31 @@ async function startOCRScanning() {
 
     try {
         const { data: { text } } = await tesseractWorker.recognize(canvas);
-        console.log('🔍 Immediate OCR result:', text);
         const imeis = extractIMEIs(text);
         if (imeis.imei1 && imeis.imei1.length >= 14) {
             handleImeiFound(imeis.imei1, imeis.imei2);
             return;
         }
-    } catch (e) {
-        console.error('Immediate OCR error:', e);
-    }
+    } catch (e) { console.error(e); }
 
     statusText.textContent = '🔍 Scanning in background...';
     progressBar.style.width = '0%';
     ocrAttemptCount = 0;
-
     if (ocrInterval) clearInterval(ocrInterval);
-
     ocrInterval = setInterval(async () => {
-        if (!isScanning || !isOcrScanning) {
-            stopOCRScanning();
-            return;
-        }
-
-        if (!video.videoWidth || video.videoWidth === 0) {
-            return;
-        }
-
+        if (!isScanning || !isOcrScanning) { stopOCRScanning(); return; }
+        if (!video.videoWidth) return;
         ocrAttemptCount++;
-
         const c2 = document.createElement('canvas');
         const ctx2 = c2.getContext('2d');
         const maxW2 = 640;
         const scale2 = Math.min(1, maxW2 / video.videoWidth);
-        const w2 = Math.round(video.videoWidth * scale2);
-        const h2 = Math.round(video.videoHeight * scale2);
-        c2.width = w2;
-        c2.height = h2;
-
+        c2.width = Math.round(video.videoWidth * scale2);
+        c2.height = Math.round(video.videoHeight * scale2);
         ctx2.imageSmoothingEnabled = true;
         ctx2.imageSmoothingQuality = 'high';
-        ctx2.drawImage(video, 0, 0, w2, h2);
-
-        const imgData2 = ctx2.getImageData(0, 0, w2, h2);
+        ctx2.drawImage(video, 0, 0, c2.width, c2.height);
+        const imgData2 = ctx2.getImageData(0, 0, c2.width, c2.height);
         const d2 = imgData2.data;
         for (let i = 0; i < d2.length; i += 4) {
             const gray = d2[i] * 0.299 + d2[i + 1] * 0.587 + d2[i + 2] * 0.114;
@@ -856,83 +1127,49 @@ async function startOCRScanning() {
             d2[i] = d2[i + 1] = d2[i + 2] = val;
         }
         ctx2.putImageData(imgData2, 0, 0);
-
-        const pct = Math.min(100, (ocrAttemptCount / 15) * 100);
-        progressBar.style.width = pct + '%';
-
+        progressBar.style.width = Math.min(100, (ocrAttemptCount / 15) * 100) + '%';
         try {
             const { data: { text } } = await tesseractWorker.recognize(c2);
-            console.log('🔍 Background OCR #' + ocrAttemptCount);
             const imeis = extractIMEIs(text);
             if (imeis.imei1 && imeis.imei1.length >= 14) {
                 handleImeiFound(imeis.imei1, imeis.imei2);
                 return;
             }
-        } catch (e) {
-            console.error('Background OCR error:', e);
-        }
+        } catch (e) { console.error(e); }
     }, 1500);
 }
 
-// ==========================================
-// HANDLE IMEI FOUND
-// ==========================================
 function handleImeiFound(imei1, imei2) {
     if (!isOcrScanning && !isScanning) return;
-
     if (imei1 === lastDetectedImei) return;
     lastDetectedImei = imei1;
-
-    console.log('✅ IMEI detected:', imei1);
-
-    const resultEl = document.getElementById('imeiResult');
-    const resultText = document.getElementById('imeiResultText');
-    resultText.textContent = '✅ IMEI: ' + imei1 + (imei2 ? ' | IMEI2 captured' : '');
-    resultEl.classList.add('show');
-
+    document.getElementById('imeiResultText').textContent = '✅ IMEI: ' + imei1 + (imei2 ? ' | IMEI2 captured' : '');
+    document.getElementById('imeiResult').classList.add('show');
     const imeiInput = document.getElementById('imei');
     if (imeiInput) {
         imeiInput.value = imei1;
         imeiInput.classList.add('flash-green');
         setTimeout(() => imeiInput.classList.remove('flash-green'), 500);
     }
-
-    if (imei2) {
-        hiddenImei2 = imei2;
-        console.log('🤫 IMEI2 stored:', hiddenImei2);
-    }
-
+    if (imei2) hiddenImei2 = imei2;
     if (navigator.vibrate) navigator.vibrate([80, 50, 80]);
-
     document.getElementById('scanStatusText').textContent = '✅ IMEI captured!';
     showToast('✅ IMEI: ' + imei1, 'success');
-
     stopOCRScanning();
     setTimeout(() => stopScanner(), 800);
 }
 
-// ==========================================
-// STOP OCR SCANNING
-// ==========================================
 function stopOCRScanning() {
     isOcrScanning = false;
-    if (ocrInterval) {
-        clearInterval(ocrInterval);
-        ocrInterval = null;
-    }
-
+    if (ocrInterval) { clearInterval(ocrInterval); ocrInterval = null; }
     const captureBtn = document.getElementById('captureBtn');
     captureBtn.disabled = false;
     captureBtn.innerHTML = '<i data-lucide="camera"></i> Capture & Read IMEI';
     lucide.createIcons();
-
     document.getElementById('ocrProgress').style.display = 'none';
     document.getElementById('ocrProgressBar').style.width = '0%';
 }
 
-// ==========================================
-// IMEI LUHN VALIDATION
-// ==========================================
 function isValidIMEI(imei) {
     if (!imei || imei.length !== 15) return false;
     if (!/^\d{15}$/.test(imei)) return false;
@@ -949,164 +1186,86 @@ function isValidIMEI(imei) {
     return sum % 10 === 0;
 }
 
-// ==========================================
-// EXTRACT IMEI
-// ==========================================
 function extractIMEIs(text) {
-    console.log('🔍 Extracting IMEI from:', text);
-
-    let imei1 = null, imei2 = null;
-    const candidates = [];
-
-    let clean = text
-        .replace(/[Oo]/g, '0')
-        .replace(/[Ss]/g, '5')
-        .replace(/[Bb]/g, '8')
-        .replace(/[Zz]/g, '2')
-        .replace(/[Gg]/g, '6')
-        .replace(/[Tt]/g, '7')
-        .replace(/[Ll]/g, '1')
-        .replace(/\s+/g, ' ')
-        .trim();
-
-    console.log('🧹 Cleaned:', clean);
-
+    let imei1 = null, imei2 = null, candidates = [];
+    let clean = text.replace(/[Oo]/g,'0').replace(/[Ss]/g,'5').replace(/[Bb]/g,'8').replace(/[Zz]/g,'2').replace(/[Gg]/g,'6').replace(/[Tt]/g,'7').replace(/[Ll]/g,'1').replace(/\s+/g,' ').trim();
     const all15Digits = clean.match(/\d{15}/g) || [];
     const all14Digits = clean.match(/\d{14}/g) || [];
-
     for (let num of all15Digits) {
-        if (/^[3-9]/.test(num) && isValidIMEI(num)) {
-            candidates.push(num);
-            console.log('✅ Valid IMEI found:', num);
-        }
+        if (/^[3-9]/.test(num) && isValidIMEI(num)) candidates.push(num);
     }
-
     const imeiPatterns = [
         /IMEI\s*1\s*[:\-]?\s*(\d{15})/i,
         /IMEI\s*[:\-]?\s*(\d{15})/i,
         /IMEI1\s*[:\-]?\s*(\d{15})/i,
-        /IMEI2\s*[:\-]?\s*(\d{15})/i,
+        /IMEI2\s*[:\-]?\s*(\d{15})/i
     ];
-
     for (let pattern of imeiPatterns) {
         const match = clean.match(pattern);
         if (match && match[1]) {
             const num = match[1];
             if (/^[3-9]/.test(num) && isValidIMEI(num)) {
-                if (!imei1) {
-                    imei1 = num;
-                    console.log('✅ IMEI1 from keyword:', imei1);
-                } else if (num !== imei1 && !imei2) {
-                    imei2 = num;
-                    console.log('✅ IMEI2 from keyword:', imei2);
-                }
+                if (!imei1) imei1 = num;
+                else if (num !== imei1 && !imei2) imei2 = num;
             }
         }
     }
-
-    if (!imei1 && candidates.length > 0) {
-        imei1 = candidates[0];
-        console.log('✅ IMEI1 from candidates:', imei1);
-    }
+    if (!imei1 && candidates.length > 0) imei1 = candidates[0];
     if (!imei2 && candidates.length > 1) {
         for (let c of candidates) {
-            if (c !== imei1) {
-                imei2 = c;
-                console.log('✅ IMEI2 from candidates:', imei2);
-                break;
-            }
+            if (c !== imei1) { imei2 = c; break; }
         }
     }
-
     if (!imei1 && all14Digits.length > 0) {
         for (let num of all14Digits) {
             if (!/^[3-9]/.test(num)) continue;
             for (let check = 0; check <= 9; check++) {
                 const candidate = num + check;
                 if (isValidIMEI(candidate)) {
-                    if (!imei1) {
-                        imei1 = candidate;
-                        console.log('✅ IMEI1 from 14-digit + check:', imei1);
-                    } else if (candidate !== imei1 && !imei2) {
-                        imei2 = candidate;
-                        console.log('✅ IMEI2 from 14-digit + check:', imei2);
-                    }
+                    if (!imei1) imei1 = candidate;
+                    else if (candidate !== imei1 && !imei2) imei2 = candidate;
                     break;
                 }
             }
             if (imei1 && imei2) break;
         }
     }
-
-    if (imei1 && !isValidIMEI(imei1)) {
-        console.log('❌ IMEI1 failed Luhn check, rejecting:', imei1);
-        imei1 = null;
-    }
-    if (imei2 && !isValidIMEI(imei2)) {
-        console.log('❌ IMEI2 failed Luhn check, rejecting:', imei2);
-        imei2 = null;
-    }
-
-    console.log('📱 Final IMEI1:', imei1, '| IMEI2:', imei2);
+    if (imei1 && !isValidIMEI(imei1)) imei1 = null;
+    if (imei2 && !isValidIMEI(imei2)) imei2 = null;
     return { imei1, imei2 };
 }
 
-// ==========================================
-// ON SCAN SUCCESS
-// ==========================================
 function onScanSuccess(imei1, imei2) {
     if (!isScanning) return;
     isScanning = false;
-
     const imeiInput = document.getElementById('imei');
     if (imeiInput) {
         imeiInput.value = imei1;
         imeiInput.classList.add('flash-green');
         setTimeout(() => imeiInput.classList.remove('flash-green'), 500);
     }
-
-    if (imei2) {
-        hiddenImei2 = imei2;
-        console.log('🤫 IMEI2 stored:', hiddenImei2);
-    }
-
+    if (imei2) hiddenImei2 = imei2;
     if (navigator.vibrate) navigator.vibrate([80, 50, 80]);
-
     stopScanner();
-    const msg = imei2 ? `✅ IMEI: ${imei1}\n✅ IMEI2 also captured!` : `✅ IMEI: ${imei1}`;
-    showToast(msg, 'success');
+    showToast('✅ IMEI: ' + imei1, 'success');
 }
 
-// ==========================================
-// STOP SCANNER
-// ==========================================
 function stopScanner() {
     isScanning = false;
     stopOCRScanning();
-
-    if (zxingCodeReader) {
-        try { zxingCodeReader.reset(); } catch (e) {}
-        zxingCodeReader = null;
-    }
-
+    if (zxingCodeReader) { try { zxingCodeReader.reset(); } catch (e) {} zxingCodeReader = null; }
     const video = document.getElementById('scanVideo');
     if (video && video.srcObject) {
         video.srcObject.getTracks().forEach(t => t.stop());
         video.srcObject = null;
     }
-
-    if (tesseractWorker) {
-        try { tesseractWorker.terminate(); } catch (e) {}
-        tesseractWorker = null;
-    }
-
+    if (tesseractWorker) { try { tesseractWorker.terminate(); } catch (e) {} tesseractWorker = null; }
     document.getElementById('scannerModal').classList.add('hidden');
     document.getElementById('scanSpinner').style.display = 'none';
     document.getElementById('scanStatusText').textContent = 'Stopped';
     document.getElementById('ocrProgress').style.display = 'none';
     document.getElementById('captureBtn').style.display = 'none';
     document.getElementById('imeiResult').classList.remove('show');
-
     const captureBtn = document.getElementById('captureBtn');
     captureBtn.disabled = false;
     captureBtn.innerHTML = '<i data-lucide="camera"></i> Capture & Read IMEI';
@@ -1136,306 +1295,48 @@ function getISTDateTime() {
     const now = new Date();
     const istOffset = 5.5 * 60 * 60 * 1000;
     const istTime = new Date(now.getTime() + istOffset);
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    const dd = String(istTime.getUTCDate()).padStart(2, '0');
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const dd = String(istTime.getUTCDate()).padStart(2,'0');
     const mmm = months[istTime.getUTCMonth()];
     const yyyy = istTime.getUTCFullYear();
     let hours = istTime.getUTCHours();
-    const minutes = String(istTime.getUTCMinutes()).padStart(2, '0');
-    const seconds = String(istTime.getUTCSeconds()).padStart(2, '0');
+    const minutes = String(istTime.getUTCMinutes()).padStart(2,'0');
+    const seconds = String(istTime.getUTCSeconds()).padStart(2,'0');
     const ampm = hours >= 12 ? 'PM' : 'AM';
-    hours = hours % 12;
-    hours = hours ? hours : 12;
-    const hh = String(hours).padStart(2, '0');
+    hours = hours % 12 || 12;
+    const hh = String(hours).padStart(2,'0');
     return `${dd}-${mmm}-${yyyy}, ${hh}:${minutes}:${seconds} ${ampm} IST`;
 }
 
 // ==========================================
-// SUBMIT DATA — with model for reject & reschedule
+// INIT
 // ==========================================
-async function submitData() {
-    if (!currentUser) {
-        showToast('Please login first', 'error');
-        return;
+document.addEventListener('DOMContentLoaded', () => {
+    // Add blocked overlay to body
+    const overlay = document.createElement('div');
+    overlay.id = 'blockedOverlay';
+    overlay.style.cssText = 'display:none; position:fixed; inset:0; background:rgba(0,0,0,0.8); z-index:9999; align-items:center; justify-content:center; color:white; font-size:20px; font-weight:bold; flex-direction:column; padding:20px; text-align:center;';
+    overlay.innerHTML = `<i data-lucide="lock" class="w-16 h-16 text-red-500 mb-4"></i><p>🔒 You are blocked for today.</p><p class="text-sm text-gray-400 mt-2">Contact admin to unblock.</p><button onclick="logoutUser()" class="mt-4 bg-red-600 px-6 py-3 rounded-xl">Logout</button>`;
+    document.body.appendChild(overlay);
+    lucide.createIcons();
+
+    document.getElementById('offlineBanner').classList.add('hidden');
+    const loggedIn = checkAuth();
+    if (!loggedIn) {
+        document.getElementById('authOverlay').style.display = 'flex';
     }
-
-    const orderId = document.getElementById('orderId').value.trim().toUpperCase();
-
-    let existingData = null;
-    let exists = false;
-    try {
-        const existingSnap = await db.ref('pickups/' + orderId).once('value');
-        exists = existingSnap.exists();
-        if (exists) {
-            existingData = existingSnap.val();
-        }
-    } catch (e) {
-        console.error('Check error:', e);
-        showToast('Error checking order status', 'error');
-        return;
+    if (loggedIn) {
+        db.ref('pending').on('value', () => { loadPendingOrders(); });
+        // set today's date for attendance
+        const today = new Date().toISOString().split('T')[0];
+        document.getElementById('attendanceDateDisplay').textContent = today;
+        // Set default tab
+        switchTab('pickup');
     }
-
-    // Password required for rejected -> pickup
-    if (exists && existingData.status === 'rejected' && currentStatus === 'pickup') {
-        const { value: password, isConfirmed } = await Swal.fire({
-            title: '🔐 Admin Password Required',
-            html: `
-                <p class="text-sm text-gray-600 mb-2">This order was previously <span class="text-red-600 font-bold">REJECTED</span>.</p>
-                <p class="text-sm text-gray-600 mb-2">Enter admin password to mark as <span class="text-green-600 font-bold">PICKUP COMPLETED</span>.</p>
-                <p class="text-xs text-gray-400 mt-2">Only admin knows this password.</p>
-            `,
-            input: 'password',
-            inputPlaceholder: 'Enter admin password',
-            inputAttributes: { autocapitalize: 'off', autocorrect: 'off' },
-            showCancelButton: true,
-            confirmButtonColor: '#3b82f6',
-            cancelButtonColor: '#dc2626',
-            confirmButtonText: '✅ Verify & Proceed',
-            cancelButtonText: 'Cancel',
-            allowOutsideClick: false,
-            preConfirm: (input) => {
-                if (!input) {
-                    Swal.showValidationMessage('Please enter the password');
-                    return false;
-                }
-                return input;
-            }
-        });
-
-        if (!isConfirmed) {
-            showToast('❌ Operation cancelled', 'error');
-            return;
-        }
-
-        if (password !== 'admin123') {
-            Swal.fire({
-                icon: 'error',
-                title: '❌ Wrong Password',
-                text: 'Invalid admin password. Access denied.',
-                confirmButtonColor: '#dc2626'
-            });
-            return;
-        }
-
-        showToast('✅ Password verified! Proceeding...', 'success');
-    }
-
-    // Duplicate pickup prevention
-    if (exists && existingData.status === 'pickup' && currentStatus === 'pickup') {
-        Swal.fire({
-            icon: 'error',
-            title: 'Already Pickup Completed',
-            text: `Order ID "${orderId}" is already marked as Pickup Completed. You cannot submit it again.`,
-            confirmButtonColor: '#3b82f6'
-        });
-        return;
-    }
-
-    const now = new Date();
-    const istDateTime = getISTDateTime();
-
-    let dbData = {
-        orderId,
-        status: currentStatus,
-        timestamp: now.toISOString(),
-        timestampIST: istDateTime,
-        date: now.toLocaleDateString('en-IN'),
-        time: now.toLocaleTimeString('en-IN'),
-        agent: currentUser.username
-    };
-
-    let whatsappMsg = '';
-
-    if (currentStatus === 'pickup') {
-        const phoneModel = document.getElementById('phoneModel').value.trim();
-        const imei = document.getElementById('imei').value.trim();
-        const value = document.getElementById('value').value.trim();
-        const custName = document.getElementById('custName').value.trim();
-
-        if (!phoneModel || !imei || !value) {
-            Swal.fire({
-                icon: 'error',
-                title: 'Missing Details',
-                text: 'Please fill Model, IMEI, and Value',
-                confirmButtonColor: '#3b82f6'
-            });
-            return;
-        }
-
-        dbData.phoneModel = phoneModel;
-        dbData.imei = imei;
-        if (hiddenImei2) dbData.imei2 = hiddenImei2;
-        dbData.value = parseInt(value);
-        dbData.customerName = custName || 'N/A';
-
-        whatsappMsg = `Order ID: ${orderId}\nStatus: Pickup Completed`;
-
-    } else {
-        // Reject or Reschedule: get model and reason
-        const phoneModel = document.getElementById('phoneModelRejectReschedule').value.trim();
-        if (!phoneModel) {
-            Swal.fire({
-                icon: 'error',
-                title: 'Missing Model',
-                text: 'Please enter the phone model.',
-                confirmButtonColor: '#3b82f6'
-            });
-            return;
-        }
-        dbData.phoneModel = phoneModel;
-
-        let reason = selectedReason;
-        if (reason.toLowerCase().includes('other')) {
-            reason = document.getElementById('otherReason').value.trim();
-            if (!reason) {
-                Swal.fire({
-                    icon: 'warning',
-                    title: 'Reason Required',
-                    text: 'Please type the reason',
-                    confirmButtonColor: '#3b82f6'
-                });
-                return;
-            }
-        }
-        if (!reason) {
-            Swal.fire({
-                icon: 'warning',
-                title: 'Select Reason',
-                text: 'Please choose a reason',
-                confirmButtonColor: '#3b82f6'
-            });
-            return;
-        }
-
-        dbData.reason = reason;
-
-        if (currentStatus === 'rejected') {
-            whatsappMsg = `Order ID: ${orderId}\nStatus: Rejected\nModel: ${phoneModel}\nReason: ${reason}`;
-        } else {
-            whatsappMsg = `Order ID: ${orderId}\nModel: ${phoneModel}\nReason: ${reason}`;
-        }
-    }
-
-    // Check if this is a reschedule and order is already pending with a different reason
-    if (currentStatus === 'reschedule') {
-        try {
-            const pendingSnap = await db.ref('pending/' + orderId).once('value');
-            if (pendingSnap.exists()) {
-                const existingPending = pendingSnap.val();
-                const existingReason = existingPending.reason || '';
-                const newReason = dbData.reason || selectedReason;
-
-                if (existingReason !== newReason) {
-                    const result = await Swal.fire({
-                        title: 'Change Reason?',
-                        text: `This order is already pending with reason: "${existingReason}". Do you want to update it to "${newReason}"?`,
-                        icon: 'question',
-                        showCancelButton: true,
-                        confirmButtonColor: '#f59e0b',
-                        cancelButtonColor: '#64748b',
-                        confirmButtonText: 'Yes, update reason',
-                        cancelButtonText: 'Cancel'
-                    });
-                    if (!result.isConfirmed) {
-                        showToast('❌ Update cancelled', 'error');
-                        return;
-                    }
-                }
-            }
-        } catch (e) {
-            console.error('Pending check error:', e);
-        }
-    }
-
-    Swal.fire({
-        title: 'Saving...',
-        html: 'Please wait',
-        allowOutsideClick: false,
-        didOpen: () => Swal.showLoading()
+    document.getElementById('loginPassword').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') loginUser();
     });
-
-    try {
-        if (exists) {
-            await db.ref('pickups/' + orderId).update(dbData);
-            console.log('🔄 Updated existing order:', orderId);
-        } else {
-            await db.ref('pickups/' + orderId).set(dbData);
-            console.log('✅ Created new order:', orderId);
-        }
-
-        if (currentStatus === 'pickup' || currentStatus === 'rejected') {
-            const pendingSnap = await db.ref('pending/' + orderId).once('value');
-            if (pendingSnap.exists()) {
-                await db.ref('pending/' + orderId).remove();
-                console.log('🗑️ Pending removed:', orderId);
-                await loadPendingOrders();
-            }
-        }
-
-        if (currentStatus === 'reschedule') {
-            const pendingData = {
-                orderId,
-                phoneModel: dbData.phoneModel,
-                reason: dbData.reason || selectedReason,
-                status: 'reschedule',
-                timestamp: now.toISOString(),
-                timestampIST: istDateTime,
-                agent: currentUser.username
-            };
-            await db.ref('pending/' + orderId).set(pendingData);
-            console.log('📌 Pending saved/updated:', orderId);
-            await loadPendingOrders();
-        }
-
-        const result = await Swal.fire({
-            icon: 'success',
-            title: '✅ Saved Successfully!',
-            html: `
-                <p class="text-sm text-gray-600 mb-2">📊 Firebase me time save ho gaya:</p>
-                <div class="text-left bg-blue-50 p-2 rounded-lg text-xs font-mono mb-3">${istDateTime}</div>
-                <p class="text-sm text-gray-600 mb-2">📱 WhatsApp message (no time):</p>
-                <div class="text-left bg-gray-50 p-3 rounded-lg text-xs font-mono whitespace-pre-wrap">${whatsappMsg}</div>
-            `,
-            showCancelButton: true,
-            showDenyButton: true,
-            confirmButtonText: '📤 Open WhatsApp',
-            denyButtonText: '📋 Copy Message',
-            cancelButtonText: 'Close',
-            confirmButtonColor: '#25D366',
-            denyButtonColor: '#3b82f6'
-        });
-
-        if (result.isConfirmed) {
-            const encoded = encodeURIComponent(whatsappMsg);
-            window.open(`https://wa.me/?text=${encoded}`, '_blank');
-            showToast('Select your group in WhatsApp', 'success');
-        } else if (result.isDenied) {
-            try {
-                await navigator.clipboard.writeText(whatsappMsg);
-                showToast('✅ Message copied!', 'success');
-            } catch (e) {
-                const ta = document.createElement('textarea');
-                ta.value = whatsappMsg;
-                document.body.appendChild(ta);
-                ta.select();
-                document.execCommand('copy');
-                document.body.removeChild(ta);
-                showToast('✅ Message copied!', 'success');
-            }
-        }
-
-        document.getElementById('orderId').value = '';
-        hiddenImei2 = '';
-        goBack();
-        loadTodayStats();
-        loadPendingOrders();
-
-    } catch (error) {
-        Swal.fire({
-            icon: 'error',
-            title: 'Error',
-            text: error.message,
-            confirmButtonColor: '#3b82f6'
-        });
-    }
-}
+    document.getElementById('loginUsername').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') document.getElementById('loginPassword').focus();
+    });
+});

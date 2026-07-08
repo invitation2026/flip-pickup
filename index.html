@@ -537,6 +537,85 @@
             .auth-box h2 { font-size: 20px; }
             .user-badge { font-size: 12px; gap: 4px; padding: 3px 8px; }
         }
+
+        /* ----- NEW ATTENDANCE STYLES ----- */
+        .attendance-status {
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-weight: 700;
+            font-size: 14px;
+            display: inline-block;
+        }
+        .attendance-status.present {
+            background: #bbf7d0;
+            color: #065f46;
+        }
+        .attendance-status.absent {
+            background: #fecaca;
+            color: #991b1b;
+        }
+        .attendance-status.blocked {
+            background: #fef3c7;
+            color: #92400e;
+        }
+        .attendance-status.not-marked {
+            background: #e2e8f0;
+            color: #64748b;
+        }
+        .otp-input-box {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        .otp-input-box input {
+            flex: 1;
+            padding: 12px 14px;
+            border: 2px solid #e2e8f0;
+            border-radius: 12px;
+            font-size: 20px;
+            font-weight: 700;
+            letter-spacing: 4px;
+            text-align: center;
+            outline: none;
+            transition: border 0.2s;
+            background: #fafafa;
+        }
+        .otp-input-box input:focus {
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59,130,246,0.1);
+        }
+        .otp-input-box button {
+            padding: 12px 20px;
+            border: none;
+            border-radius: 12px;
+            font-weight: 700;
+            font-size: 15px;
+            background: #3b82f6;
+            color: white;
+            cursor: pointer;
+            transition: 0.2s;
+            white-space: nowrap;
+        }
+        .otp-input-box button:active { transform: scale(0.95); }
+        .otp-input-box button:disabled { opacity: 0.5; cursor: not-allowed; }
+        .attendance-history {
+            max-height: 200px;
+            overflow-y: auto;
+            margin-top: 12px;
+        }
+        .attendance-history .day-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 6px 8px;
+            border-bottom: 1px solid #f1f5f9;
+            font-size: 13px;
+        }
+        .attendance-history .day-item .date { color: #64748b; }
+        .attendance-history .day-item .status { font-weight: 600; }
+        .attendance-history .day-item .status.present { color: #059669; }
+        .attendance-history .day-item .status.absent { color: #dc2626; }
+        .attendance-history .day-item .status.blocked { color: #d97706; }
+        .attendance-history .day-item .status.not-marked { color: #94a3b8; }
     </style>
 </head>
 <body class="no-scrollbar">
@@ -605,67 +684,147 @@
         <!-- Content Area -->
         <div class="px-4 py-5">
 
-            <!-- STEP 1: Order ID + Status Selection -->
-            <div id="step-order" class="space-y-4 fade-in">
+            <!-- ===== TAB BAR: Pickup | Pending | Attendance ===== -->
+            <div class="tab-bar mb-4" id="mainTabBar">
+                <button class="active" data-tab="pickup" onclick="switchTab('pickup')">
+                    <i data-lucide="package-check"></i> Pickup
+                </button>
+                <button data-tab="pending" onclick="switchTab('pending')">
+                    <i data-lucide="list-todo"></i> Pending
+                    <span id="pendingCountBadgeMain" class="pending-badge">0</span>
+                </button>
+                <button data-tab="attendance" onclick="switchTab('attendance')">
+                    <i data-lucide="clipboard-check"></i> Attendance
+                </button>
+            </div>
 
-                <!-- Order ID Card -->
-                <div class="glass rounded-2xl p-5 shadow-xl">
-                    <label class="flex items-center gap-2 text-sm font-bold text-gray-700 mb-3">
-                        <i data-lucide="hash" class="w-4 h-4 text-blue-600"></i>
-                        ORDER ID
-                    </label>
-                    <div class="relative">
-                        <input type="text" id="orderId" placeholder="SBMR3B0Q2P85FE91"
-                        class="input-field w-full p-4 rounded-xl text-lg font-mono uppercase outline-none"
-                        autocomplete="off" autocapitalize="characters" />
-                        <button onclick="pasteOrderId()" class="absolute right-2 top-1/2 -translate-y-1/2 p-2 text-gray-400 hover:text-blue-600">
-                            <i data-lucide="clipboard-paste" class="w-5 h-5"></i>
-                        </button>
+            <!-- ===== TAB: PICKUP ===== -->
+            <div id="tab-pickup" class="tab-content">
+                <!-- STEP 1: Order ID + Status Selection -->
+                <div id="step-order" class="space-y-4 fade-in">
+
+                    <!-- Order ID Card -->
+                    <div class="glass rounded-2xl p-5 shadow-xl">
+                        <label class="flex items-center gap-2 text-sm font-bold text-gray-700 mb-3">
+                            <i data-lucide="hash" class="w-4 h-4 text-blue-600"></i>
+                            ORDER ID
+                        </label>
+                        <div class="relative">
+                            <input type="text" id="orderId" placeholder="SBMR3B0Q2P85FE91"
+                            class="input-field w-full p-4 rounded-xl text-lg font-mono uppercase outline-none"
+                            autocomplete="off" autocapitalize="characters" />
+                            <button onclick="pasteOrderId()" class="absolute right-2 top-1/2 -translate-y-1/2 p-2 text-gray-400 hover:text-blue-600">
+                                <i data-lucide="clipboard-paste" class="w-5 h-5"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Status Selection -->
+                    <div class="glass rounded-2xl p-5 shadow-xl">
+                        <label class="flex items-center gap-2 text-sm font-bold text-gray-700 mb-3">
+                            <i data-lucide="list-checks" class="w-4 h-4 text-blue-600"></i>
+                            SELECT STATUS
+                        </label>
+
+                        <div class="space-y-3">
+                            <button onclick="showForm('pickup')" class="status-card btn-bounce w-full bg-gradient-to-r from-green-500 to-emerald-600 text-white p-5 rounded-2xl font-bold text-lg shadow-lg flex items-center justify-between">
+                                <div class="flex items-center gap-3">
+                                    <div class="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center">
+                                        <i data-lucide="check-circle-2" class="w-6 h-6"></i>
+                                    </div>
+                                    <span>Pickup Completed</span>
+                                </div>
+                                <i data-lucide="chevron-right" class="w-5 h-5"></i>
+                            </button>
+
+                            <button onclick="showForm('rejected')" class="status-card btn-bounce w-full bg-gradient-to-r from-red-500 to-rose-600 text-white p-5 rounded-2xl font-bold text-lg shadow-lg flex items-center justify-between">
+                                <div class="flex items-center gap-3">
+                                    <div class="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center">
+                                        <i data-lucide="x-circle" class="w-6 h-6"></i>
+                                    </div>
+                                    <span>Rejected</span>
+                                </div>
+                                <i data-lucide="chevron-right" class="w-5 h-5"></i>
+                            </button>
+
+                            <button onclick="showForm('reschedule')" class="status-card btn-bounce w-full bg-gradient-to-r from-amber-500 to-orange-600 text-white p-5 rounded-2xl font-bold text-lg shadow-lg flex items-center justify-between">
+                                <div class="flex items-center gap-3">
+                                    <div class="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center">
+                                        <i data-lucide="clock" class="w-6 h-6"></i>
+                                    </div>
+                                    <span>Reschedule / Pending</span>
+                                </div>
+                                <i data-lucide="chevron-right" class="w-5 h-5"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Today's Stats -->
+                    <div class="glass rounded-2xl p-5 shadow-xl">
+                        <div class="flex items-center justify-between mb-3">
+                            <h3 class="text-sm font-bold text-gray-700 flex items-center gap-2">
+                                <i data-lucide="bar-chart-3" class="w-4 h-4 text-blue-600"></i>
+                                TODAY'S STATS
+                            </h3>
+                            <button onclick="loadTodayStats()" class="text-xs text-blue-600 font-semibold flex items-center gap-1">
+                                <i data-lucide="refresh-cw" class="w-3 h-3"></i>
+                                Refresh
+                            </button>
+                        </div>
+                        <div class="grid grid-cols-3 gap-2">
+                            <div class="bg-green-50 rounded-xl p-3 text-center">
+                                <div id="statPickup" class="text-2xl font-bold text-green-600">0</div>
+                                <div class="text-xs text-gray-600 font-medium">Pickup</div>
+                            </div>
+                            <div class="bg-red-50 rounded-xl p-3 text-center">
+                                <div id="statReject" class="text-2xl font-bold text-red-600">0</div>
+                                <div class="text-xs text-gray-600 font-medium">Reject</div>
+                            </div>
+                            <div class="bg-amber-50 rounded-xl p-3 text-center">
+                                <div id="statReschedule" class="text-2xl font-bold text-amber-600">0</div>
+                                <div class="text-xs text-gray-600 font-medium">Pending</div>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
-                <!-- Status Selection -->
-                <div class="glass rounded-2xl p-5 shadow-xl">
-                    <label class="flex items-center gap-2 text-sm font-bold text-gray-700 mb-3">
-                        <i data-lucide="list-checks" class="w-4 h-4 text-blue-600"></i>
-                        SELECT STATUS
-                    </label>
+                <!-- STEP 2: Dynamic Form -->
+                <div id="step-form" class="hidden space-y-4 slide-up">
 
-                    <div class="space-y-3">
-                        <button onclick="showForm('pickup')" class="status-card btn-bounce w-full bg-gradient-to-r from-green-500 to-emerald-600 text-white p-5 rounded-2xl font-bold text-lg shadow-lg flex items-center justify-between">
-                            <div class="flex items-center gap-3">
-                                <div class="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center">
-                                    <i data-lucide="check-circle-2" class="w-6 h-6"></i>
-                                </div>
-                                <span>Pickup Completed</span>
-                            </div>
-                            <i data-lucide="chevron-right" class="w-5 h-5"></i>
-                        </button>
+                    <button onclick="goBack()" class="btn-bounce flex items-center gap-2 text-blue-600 font-bold px-4 py-2 rounded-xl glass shadow">
+                        <i data-lucide="arrow-left" class="w-5 h-5"></i>
+                        <span>Back</span>
+                    </button>
 
-                        <button onclick="showForm('rejected')" class="status-card btn-bounce w-full bg-gradient-to-r from-red-500 to-rose-600 text-white p-5 rounded-2xl font-bold text-lg shadow-lg flex items-center justify-between">
-                            <div class="flex items-center gap-3">
-                                <div class="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center">
-                                    <i data-lucide="x-circle" class="w-6 h-6"></i>
-                                </div>
-                                <span>Rejected</span>
+                    <div id="formHeader" class="glass rounded-2xl p-5 shadow-xl">
+                        <div class="flex items-center gap-3">
+                            <div id="formIcon" class="w-12 h-12 rounded-xl flex items-center justify-center"></div>
+                            <div>
+                                <h2 id="formTitle" class="text-xl font-bold text-gray-800"></h2>
+                                <p id="formSubtitle" class="text-xs text-gray-500"></p>
                             </div>
-                            <i data-lucide="chevron-right" class="w-5 h-5"></i>
-                        </button>
-
-                        <button onclick="showForm('reschedule')" class="status-card btn-bounce w-full bg-gradient-to-r from-amber-500 to-orange-600 text-white p-5 rounded-2xl font-bold text-lg shadow-lg flex items-center justify-between">
-                            <div class="flex items-center gap-3">
-                                <div class="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center">
-                                    <i data-lucide="clock" class="w-6 h-6"></i>
-                                </div>
-                                <span>Reschedule / Pending</span>
-                            </div>
-                            <i data-lucide="chevron-right" class="w-5 h-5"></i>
-                        </button>
+                        </div>
                     </div>
-                </div>
 
-                <!-- Pending Orders Section -->
-                <div class="glass rounded-2xl p-5 shadow-xl" id="pendingSection">
+                    <div class="glass rounded-2xl p-4 shadow-lg">
+                        <div class="flex items-center justify-between">
+                            <span class="text-xs font-bold text-gray-500">ORDER ID</span>
+                            <span id="displayOrderId" class="font-mono font-bold text-gray-800 text-sm"></span>
+                        </div>
+                    </div>
+
+                    <div id="formFields" class="glass rounded-2xl p-5 shadow-xl space-y-4"></div>
+
+                    <button onclick="submitData()" id="submitBtn" class="btn-bounce w-full bg-gradient-to-r from-blue-600 to-purple-600 text-white p-4 rounded-2xl font-bold text-lg shadow-xl flex items-center justify-center gap-2">
+                        <i data-lucide="send" class="w-5 h-5"></i>
+                        <span>Submit & Send to WhatsApp</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- ===== TAB: PENDING ===== -->
+            <div id="tab-pending" class="tab-content" style="display:none;">
+                <div class="glass rounded-2xl p-5 shadow-xl">
                     <div class="flex items-center justify-between mb-3">
                         <h3 class="text-sm font-bold text-gray-700 flex items-center gap-2">
                             <i data-lucide="list-todo" class="w-4 h-4 text-amber-600"></i>
@@ -696,72 +855,50 @@
                         </div>
                     </div>
                 </div>
-
-                <!-- Today's Stats -->
-                <div class="glass rounded-2xl p-5 shadow-xl">
-                    <div class="flex items-center justify-between mb-3">
-                        <h3 class="text-sm font-bold text-gray-700 flex items-center gap-2">
-                            <i data-lucide="bar-chart-3" class="w-4 h-4 text-blue-600"></i>
-                            TODAY'S STATS
-                        </h3>
-                        <button onclick="loadTodayStats()" class="text-xs text-blue-600 font-semibold flex items-center gap-1">
-                            <i data-lucide="refresh-cw" class="w-3 h-3"></i>
-                            Refresh
-                        </button>
-                    </div>
-                    <div class="grid grid-cols-3 gap-2">
-                        <div class="bg-green-50 rounded-xl p-3 text-center">
-                            <div id="statPickup" class="text-2xl font-bold text-green-600">0</div>
-                            <div class="text-xs text-gray-600 font-medium">Pickup</div>
-                        </div>
-                        <div class="bg-red-50 rounded-xl p-3 text-center">
-                            <div id="statReject" class="text-2xl font-bold text-red-600">0</div>
-                            <div class="text-xs text-gray-600 font-medium">Reject</div>
-                        </div>
-                        <div class="bg-amber-50 rounded-xl p-3 text-center">
-                            <div id="statReschedule" class="text-2xl font-bold text-amber-600">0</div>
-                            <div class="text-xs text-gray-600 font-medium">Pending</div>
-                        </div>
-                    </div>
-                </div>
             </div>
 
-            <!-- STEP 2: Dynamic Form -->
-            <div id="step-form" class="hidden space-y-4 slide-up">
-
-                <button onclick="goBack()" class="btn-bounce flex items-center gap-2 text-blue-600 font-bold px-4 py-2 rounded-xl glass shadow">
-                    <i data-lucide="arrow-left" class="w-5 h-5"></i>
-                    <span>Back</span>
-                </button>
-
-                <div id="formHeader" class="glass rounded-2xl p-5 shadow-xl">
-                    <div class="flex items-center gap-3">
-                        <div id="formIcon" class="w-12 h-12 rounded-xl flex items-center justify-center"></div>
-                        <div>
-                            <h2 id="formTitle" class="text-xl font-bold text-gray-800"></h2>
-                            <p id="formSubtitle" class="text-xs text-gray-500"></p>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="glass rounded-2xl p-4 shadow-lg">
+            <!-- ===== TAB: ATTENDANCE ===== -->
+            <div id="tab-attendance" class="tab-content" style="display:none;">
+                <div class="glass rounded-2xl p-5 shadow-xl space-y-4">
                     <div class="flex items-center justify-between">
-                        <span class="text-xs font-bold text-gray-500">ORDER ID</span>
-                        <span id="displayOrderId" class="font-mono font-bold text-gray-800 text-sm"></span>
+                        <h3 class="text-sm font-bold text-gray-700 flex items-center gap-2">
+                            <i data-lucide="clipboard-check" class="w-4 h-4 text-purple-600"></i>
+                            Today's Attendance
+                        </h3>
+                        <span id="attendanceDateDisplay" class="text-xs text-gray-500"></span>
+                    </div>
+
+                    <!-- Status display -->
+                    <div id="attendanceStatusBox" class="p-3 rounded-xl bg-gray-50 text-center">
+                        <span class="attendance-status not-marked">Not Marked</span>
+                        <p class="text-xs text-gray-400 mt-1">Please enter the OTP to mark your attendance</p>
+                    </div>
+
+                    <!-- OTP Input -->
+                    <div class="otp-input-box">
+                        <input type="text" id="otpInput" placeholder="Enter OTP" maxlength="6" inputmode="numeric" pattern="[0-9]*" />
+                        <button id="verifyOtpBtn" onclick="verifyOTP()">Verify</button>
+                    </div>
+
+                    <!-- Refresh OTP button -->
+                    <button onclick="refreshOTP()" class="text-xs text-blue-600 font-semibold flex items-center gap-1">
+                        <i data-lucide="refresh-cw" class="w-3 h-3"></i> Refresh OTP
+                    </button>
+
+                    <!-- Attendance History (last 7 days) -->
+                    <div class="mt-4 border-t border-gray-200 pt-4">
+                        <h4 class="text-xs font-bold text-gray-500 mb-2">📅 Last 7 days</h4>
+                        <div id="attendanceHistory" class="attendance-history">
+                            <div class="text-sm text-gray-400 text-center">Loading...</div>
+                        </div>
                     </div>
                 </div>
-
-                <div id="formFields" class="glass rounded-2xl p-5 shadow-xl space-y-4"></div>
-
-                <button onclick="submitData()" id="submitBtn" class="btn-bounce w-full bg-gradient-to-r from-blue-600 to-purple-600 text-white p-4 rounded-2xl font-bold text-lg shadow-xl flex items-center justify-center gap-2">
-                    <i data-lucide="send" class="w-5 h-5"></i>
-                    <span>Submit & Send to WhatsApp</span>
-                </button>
             </div>
+
         </div>
     </div>
 
-    <!-- Scanner Modal -->
+    <!-- Scanner Modal (unchanged) -->
     <div id="scannerModal" class="hidden fixed inset-0 scanner-overlay z-50 flex items-center justify-center p-4">
         <div class="bg-white rounded-3xl p-5 w-full max-w-sm shadow-2xl">
             <div class="flex items-center justify-between mb-3">
