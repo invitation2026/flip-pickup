@@ -75,8 +75,8 @@ function startUserExistenceCheck() {
             logoutUser();
             showToast('🔒 You have been logged out by admin.', 'info');
         }
-        // Check if blocked
-        if (data.is_blocked === true) {
+        // Check if blocked (only for agents)
+        if (data.is_blocked === true && data.role !== 'admin') {
             document.getElementById('blockedOverlay').style.display = 'flex';
         } else {
             document.getElementById('blockedOverlay').style.display = 'none';
@@ -124,11 +124,18 @@ async function loginUser() {
         localStorage.setItem('flipkart_agent_user', JSON.stringify(currentUser));
         showMainApp();
         showToast('✅ Welcome, ' + currentUser.name + '!', 'success');
-        // Check attendance after login
-        await checkAttendanceAndBlock();
+        // FIX: admin skip attendance
+        if (currentUser.role !== 'admin') {
+            await checkAttendanceAndBlock();
+            loadAttendanceHistory();
+        } else {
+            // Hide attendance tab for admin
+            document.getElementById('attendanceTabBtn').style.display = 'none';
+            // Ensure blocked overlay is hidden
+            document.getElementById('blockedOverlay').style.display = 'none';
+        }
         loadTodayStats();
         loadPendingOrders();
-        loadAttendanceHistory();
         startUserExistenceCheck();
     } catch (e) {
         console.error(e);
@@ -155,10 +162,15 @@ function checkAuth() {
             verifyUserExists(currentUser.username).then(async exists => {
                 if (exists) {
                     showMainApp();
-                    await checkAttendanceAndBlock();
+                    if (currentUser.role !== 'admin') {
+                        await checkAttendanceAndBlock();
+                        loadAttendanceHistory();
+                    } else {
+                        document.getElementById('attendanceTabBtn').style.display = 'none';
+                        document.getElementById('blockedOverlay').style.display = 'none';
+                    }
                     loadTodayStats();
                     loadPendingOrders();
-                    loadAttendanceHistory();
                     startUserExistenceCheck();
                 } else {
                     logoutUser();
@@ -227,6 +239,10 @@ function showChangePassword() {
 // ==========================================
 async function checkAttendanceAndBlock() {
     if (!currentUser) return;
+    // FIX: if admin, skip attendance entirely
+    if (currentUser.role === 'admin') {
+        return;
+    }
     const today = new Date().toISOString().split('T')[0];
     // Check if user is blocked
     const userSnap = await db.ref('users/' + currentUser.username + '/is_blocked').once('value');
@@ -410,6 +426,11 @@ function updateAttendanceUI(status) {
 
 async function loadAttendanceHistory() {
     if (!currentUser) return;
+    // FIX: if admin, don't load history
+    if (currentUser.role === 'admin') {
+        document.getElementById('attendanceHistory').innerHTML = '<div class="text-sm text-gray-400">Admin has no attendance</div>';
+        return;
+    }
     const container = document.getElementById('attendanceHistory');
     container.innerHTML = '<div class="text-sm text-gray-400 text-center">Loading...</div>';
     try {
@@ -731,11 +752,13 @@ async function submitData() {
         showToast('Please login first', 'error');
         return;
     }
-    // Check if blocked
-    const userSnap = await db.ref('users/' + currentUser.username + '/is_blocked').once('value');
-    if (userSnap.val() === true) {
-        showToast('🔒 You are blocked for today!', 'error');
-        return;
+    // Check if blocked (only for agents)
+    if (currentUser.role !== 'admin') {
+        const userSnap = await db.ref('users/' + currentUser.username + '/is_blocked').once('value');
+        if (userSnap.val() === true) {
+            showToast('🔒 You are blocked for today!', 'error');
+            return;
+        }
     }
 
     const orderId = document.getElementById('orderId').value.trim().toUpperCase();

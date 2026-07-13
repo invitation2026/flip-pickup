@@ -693,7 +693,8 @@
                     <i data-lucide="list-todo"></i> Pending
                     <span id="pendingCountBadgeMain" class="pending-badge">0</span>
                 </button>
-                <button data-tab="attendance" onclick="switchTab('attendance')">
+                <!-- 🔥 Added id="attendanceTabBtn" so admin can hide it -->
+                <button data-tab="attendance" id="attendanceTabBtn" onclick="switchTab('attendance')">
                     <i data-lucide="clipboard-check"></i> Attendance
                 </button>
             </div>
