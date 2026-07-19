@@ -34,8 +34,10 @@ let ocrAttemptCount = 0;
 let lastDetectedImei = '';
 
 // ========== BILL / AADHAAR IMAGE STATE (Pickup) ==========
-let pickupBillImageData = '';       // compressed base64 dataURL
-let pickupAadhaarImageData = '';    // compressed base64 dataURL
+// Multi-image support (max 3 per document)
+const PICKUP_MAX_IMAGES = 3;
+let pickupBillImages = [];      // array of compressed base64 dataURLs
+let pickupAadhaarImages = [];   // array of compressed base64 dataURLs
 
 // Compress image file -> JPEG dataURL (max 1400px, quality ~0.72)
 // Works for both camera capture and gallery pick via <input type="file" accept="image/*">
@@ -71,30 +73,66 @@ function compressImageFile(file, maxDim = 1400, quality = 0.72) {
     });
 }
 
-// Handle image pick for pickup form (called via inline onchange)
-async function handlePickupImagePick(inputEl, which) {
-    const file = inputEl.files && inputEl.files[0];
-    if (!file) return;
+// Render preview thumbnails for pickup images (with remove button per image)
+function renderPickupImgList(which) {
+    const arr = which === 'bill' ? pickupBillImages : pickupAadhaarImages;
     const previewEl = document.getElementById(which === 'bill' ? 'billImgPreview' : 'aadhaarImgPreview');
     const infoEl = document.getElementById(which === 'bill' ? 'billImgInfo' : 'aadhaarImgInfo');
-    if (previewEl) previewEl.innerHTML = '<div class="text-xs text-gray-500 py-2">⏳ Compressing…</div>';
-    try {
-        const dataUrl = await compressImageFile(file);
-        if (which === 'bill') pickupBillImageData = dataUrl; else pickupAadhaarImageData = dataUrl;
-        const sizeKB = Math.round((dataUrl.length * 3 / 4) / 1024);
-        if (previewEl) previewEl.innerHTML = `<img src="${dataUrl}" class="w-full h-32 object-cover rounded-lg border border-gray-200" alt="preview">`;
-        if (infoEl) infoEl.textContent = `✅ Ready · ~${sizeKB} KB`;
-    } catch (e) {
-        console.error(e);
-        if (previewEl) previewEl.innerHTML = '';
-        if (infoEl) infoEl.textContent = '❌ Failed to load image';
-        showToast('Image process failed', 'error');
+    if (!previewEl) return;
+    if (!arr.length) {
+        previewEl.innerHTML = '';
+        if (infoEl) infoEl.textContent = `${PICKUP_MAX_IMAGES} images max · ${PICKUP_MAX_IMAGES} slots free`;
+        return;
     }
+    let totalKB = 0;
+    previewEl.innerHTML = `<div class="grid grid-cols-3 gap-2">` + arr.map((d, i) => {
+        const kb = Math.round((d.length * 3 / 4) / 1024);
+        totalKB += kb;
+        return `<div class="relative group">
+            <img src="${d}" class="w-full h-20 object-cover rounded-lg border border-gray-200" alt="p${i}">
+            <button type="button" onclick="removePickupImage('${which}',${i})" class="absolute -top-1.5 -right-1.5 w-6 h-6 rounded-full bg-red-600 text-white text-xs font-bold shadow-md">✕</button>
+            <div class="absolute bottom-0 left-0 right-0 bg-black/50 text-white text-[9px] text-center rounded-b-lg">${kb}KB</div>
+        </div>`;
+    }).join('') + `</div>`;
+    if (infoEl) infoEl.textContent = `✅ ${arr.length}/${PICKUP_MAX_IMAGES} · total ~${totalKB} KB`;
+}
+
+// Handle image pick for pickup form — appends to array (max PICKUP_MAX_IMAGES)
+async function handlePickupImagePick(inputEl, which) {
+    const files = inputEl.files ? Array.from(inputEl.files) : [];
+    if (!files.length) return;
+    const arr = which === 'bill' ? pickupBillImages : pickupAadhaarImages;
+    const infoEl = document.getElementById(which === 'bill' ? 'billImgInfo' : 'aadhaarImgInfo');
+    if (arr.length >= PICKUP_MAX_IMAGES) {
+        showToast(`Max ${PICKUP_MAX_IMAGES} images allowed`, 'error');
+        inputEl.value = '';
+        return;
+    }
+    const room = PICKUP_MAX_IMAGES - arr.length;
+    const toProcess = files.slice(0, room);
+    if (infoEl) infoEl.textContent = '⏳ Compressing…';
+    for (const f of toProcess) {
+        try {
+            const dataUrl = await compressImageFile(f);
+            arr.push(dataUrl);
+        } catch (e) {
+            console.error(e);
+            showToast('Image process failed', 'error');
+        }
+    }
+    inputEl.value = '';  // allow re-picking same file
+    renderPickupImgList(which);
+}
+
+function removePickupImage(which, idx) {
+    const arr = which === 'bill' ? pickupBillImages : pickupAadhaarImages;
+    arr.splice(idx, 1);
+    renderPickupImgList(which);
 }
 
 function clearPickupImageState() {
-    pickupBillImageData = '';
-    pickupAadhaarImageData = '';
+    pickupBillImages = [];
+    pickupAadhaarImages = [];
 }
 
 
@@ -763,13 +801,19 @@ function showForm(status) {
                     <input type="text" id="billNumber" placeholder="Bill / Invoice no." class="input-field w-full p-3 rounded-xl outline-none">
                 </div>
                 <div class="mb-4">
-                    <label class="text-xs font-semibold text-gray-500 mb-1 block">Bill Image</label>
-                    <label for="billImageInput" class="btn-bounce cursor-pointer flex items-center justify-center gap-2 w-full p-3 rounded-xl border-2 border-dashed border-blue-300 bg-blue-50 text-blue-700 font-semibold text-sm">
-                        <i data-lucide="camera" class="w-4 h-4"></i> Camera / Gallery
-                    </label>
-                    <input id="billImageInput" type="file" accept="image/*" class="hidden" onchange="handlePickupImagePick(this,'bill')">
+                    <label class="text-xs font-semibold text-gray-500 mb-1 block">Bill Images <span class="text-gray-400 font-normal">(up to 3)</span></label>
+                    <div class="grid grid-cols-2 gap-2">
+                        <label for="billImageCam" class="btn-bounce cursor-pointer flex items-center justify-center gap-2 p-3 rounded-xl border-2 border-dashed border-blue-300 bg-blue-50 text-blue-700 font-semibold text-sm">
+                            <i data-lucide="camera" class="w-4 h-4"></i> Camera
+                        </label>
+                        <label for="billImageGal" class="btn-bounce cursor-pointer flex items-center justify-center gap-2 p-3 rounded-xl border-2 border-dashed border-blue-300 bg-blue-50 text-blue-700 font-semibold text-sm">
+                            <i data-lucide="image" class="w-4 h-4"></i> Gallery
+                        </label>
+                    </div>
+                    <input id="billImageCam" type="file" accept="image/*" capture="environment" class="hidden" onchange="handlePickupImagePick(this,'bill')">
+                    <input id="billImageGal" type="file" accept="image/*" multiple class="hidden" onchange="handlePickupImagePick(this,'bill')">
                     <div id="billImgPreview" class="mt-2"></div>
-                    <div id="billImgInfo" class="text-[11px] text-gray-500 mt-1"></div>
+                    <div id="billImgInfo" class="text-[11px] text-gray-500 mt-1">3 images max · 3 slots free</div>
                 </div>
 
                 <div class="mb-3">
@@ -777,13 +821,19 @@ function showForm(status) {
                     <input type="text" id="aadhaarNumber" placeholder="12-digit Aadhaar" inputmode="numeric" maxlength="14" class="input-field w-full p-3 rounded-xl outline-none font-mono">
                 </div>
                 <div>
-                    <label class="text-xs font-semibold text-gray-500 mb-1 block">Aadhaar Image</label>
-                    <label for="aadhaarImageInput" class="btn-bounce cursor-pointer flex items-center justify-center gap-2 w-full p-3 rounded-xl border-2 border-dashed border-indigo-300 bg-indigo-50 text-indigo-700 font-semibold text-sm">
-                        <i data-lucide="camera" class="w-4 h-4"></i> Camera / Gallery
-                    </label>
-                    <input id="aadhaarImageInput" type="file" accept="image/*" class="hidden" onchange="handlePickupImagePick(this,'aadhaar')">
+                    <label class="text-xs font-semibold text-gray-500 mb-1 block">Aadhaar Images <span class="text-gray-400 font-normal">(up to 3)</span></label>
+                    <div class="grid grid-cols-2 gap-2">
+                        <label for="aadhaarImageCam" class="btn-bounce cursor-pointer flex items-center justify-center gap-2 p-3 rounded-xl border-2 border-dashed border-indigo-300 bg-indigo-50 text-indigo-700 font-semibold text-sm">
+                            <i data-lucide="camera" class="w-4 h-4"></i> Camera
+                        </label>
+                        <label for="aadhaarImageGal" class="btn-bounce cursor-pointer flex items-center justify-center gap-2 p-3 rounded-xl border-2 border-dashed border-indigo-300 bg-indigo-50 text-indigo-700 font-semibold text-sm">
+                            <i data-lucide="image" class="w-4 h-4"></i> Gallery
+                        </label>
+                    </div>
+                    <input id="aadhaarImageCam" type="file" accept="image/*" capture="environment" class="hidden" onchange="handlePickupImagePick(this,'aadhaar')">
+                    <input id="aadhaarImageGal" type="file" accept="image/*" multiple class="hidden" onchange="handlePickupImagePick(this,'aadhaar')">
                     <div id="aadhaarImgPreview" class="mt-2"></div>
-                    <div id="aadhaarImgInfo" class="text-[11px] text-gray-500 mt-1"></div>
+                    <div id="aadhaarImgInfo" class="text-[11px] text-gray-500 mt-1">3 images max · 3 slots free</div>
                 </div>
             </div>
         `;
@@ -938,8 +988,8 @@ async function submitData() {
         const _aadNo  = (document.getElementById('aadhaarNumber')?.value || '').trim();
         if (_billNo) dbData.billNumber = _billNo;
         if (_aadNo)  dbData.aadhaarNumber = _aadNo;
-        if (pickupBillImageData)    dbData.billImage = pickupBillImageData;
-        if (pickupAadhaarImageData) dbData.aadhaarImage = pickupAadhaarImageData;
+        if (pickupBillImages.length)    { dbData.billImages = pickupBillImages;    dbData.billImage = pickupBillImages[0]; }
+        if (pickupAadhaarImages.length) { dbData.aadhaarImages = pickupAadhaarImages; dbData.aadhaarImage = pickupAadhaarImages[0]; }
         whatsappMsg = `Order ID: ${orderId}\nStatus: Pickup Completed`;
     } else {
         const phoneModel = document.getElementById('phoneModelRejectReschedule').value.trim();
