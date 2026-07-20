@@ -33,6 +33,109 @@ let isOcrScanning = false;
 let ocrAttemptCount = 0;
 let lastDetectedImei = '';
 
+// ========== BILL / AADHAAR IMAGE STATE (Pickup) ==========
+// Multi-image support (max 3 per document)
+const PICKUP_MAX_IMAGES = 3;
+let pickupBillImages = [];      // array of compressed base64 dataURLs
+let pickupAadhaarImages = [];   // array of compressed base64 dataURLs
+
+// Compress image file -> JPEG dataURL (ULTRA-OPTIMIZED: max 720px, quality 0.4)
+// Target ~10-20 KB per image — Firebase free tier chalega 3-4+ saal @ 100 orders/day
+function compressImageFile(file, maxDim = 720, quality = 0.4) {
+    return new Promise((resolve, reject) => {
+        if (!file) return reject('No file');
+        if (!file.type.startsWith('image/')) return reject('Not an image');
+        const reader = new FileReader();
+        reader.onerror = () => reject('Read error');
+        reader.onload = () => {
+            const img = new Image();
+            img.onerror = () => reject('Image decode error');
+            img.onload = () => {
+                let { width, height } = img;
+                if (width > maxDim || height > maxDim) {
+                    if (width > height) { height = Math.round(height * maxDim / width); width = maxDim; }
+                    else                { width  = Math.round(width  * maxDim / height); height = maxDim; }
+                }
+                const canvas = document.createElement('canvas');
+                canvas.width = width; canvas.height = height;
+                const ctx = canvas.getContext('2d');
+                ctx.fillStyle = '#fff';
+                ctx.fillRect(0, 0, width, height);
+                ctx.drawImage(img, 0, 0, width, height);
+                try {
+                    const dataUrl = canvas.toDataURL('image/jpeg', quality);
+                    resolve(dataUrl);
+                } catch (e) { reject(e); }
+            };
+            img.src = reader.result;
+        };
+        reader.readAsDataURL(file);
+    });
+}
+
+// Render preview thumbnails for pickup images (with remove button per image)
+function renderPickupImgList(which) {
+    const arr = which === 'bill' ? pickupBillImages : pickupAadhaarImages;
+    const previewEl = document.getElementById(which === 'bill' ? 'billImgPreview' : 'aadhaarImgPreview');
+    const infoEl = document.getElementById(which === 'bill' ? 'billImgInfo' : 'aadhaarImgInfo');
+    if (!previewEl) return;
+    if (!arr.length) {
+        previewEl.innerHTML = '';
+        if (infoEl) infoEl.textContent = `${PICKUP_MAX_IMAGES} images max · ${PICKUP_MAX_IMAGES} slots free`;
+        return;
+    }
+    let totalKB = 0;
+    previewEl.innerHTML = `<div class="grid grid-cols-3 gap-2">` + arr.map((d, i) => {
+        const kb = Math.round((d.length * 3 / 4) / 1024);
+        totalKB += kb;
+        return `<div class="relative group">
+            <img src="${d}" class="w-full h-20 object-cover rounded-lg border border-gray-200" alt="p${i}">
+            <button type="button" onclick="removePickupImage('${which}',${i})" class="absolute -top-1.5 -right-1.5 w-6 h-6 rounded-full bg-red-600 text-white text-xs font-bold shadow-md">✕</button>
+            <div class="absolute bottom-0 left-0 right-0 bg-black/50 text-white text-[9px] text-center rounded-b-lg">${kb}KB</div>
+        </div>`;
+    }).join('') + `</div>`;
+    if (infoEl) infoEl.textContent = `✅ ${arr.length}/${PICKUP_MAX_IMAGES} · total ~${totalKB} KB`;
+}
+
+// Handle image pick for pickup form — appends to array (max PICKUP_MAX_IMAGES)
+async function handlePickupImagePick(inputEl, which) {
+    const files = inputEl.files ? Array.from(inputEl.files) : [];
+    if (!files.length) return;
+    const arr = which === 'bill' ? pickupBillImages : pickupAadhaarImages;
+    const infoEl = document.getElementById(which === 'bill' ? 'billImgInfo' : 'aadhaarImgInfo');
+    if (arr.length >= PICKUP_MAX_IMAGES) {
+        showToast(`Max ${PICKUP_MAX_IMAGES} images allowed`, 'error');
+        inputEl.value = '';
+        return;
+    }
+    const room = PICKUP_MAX_IMAGES - arr.length;
+    const toProcess = files.slice(0, room);
+    if (infoEl) infoEl.textContent = '⏳ Compressing…';
+    for (const f of toProcess) {
+        try {
+            const dataUrl = await compressImageFile(f);
+            arr.push(dataUrl);
+        } catch (e) {
+            console.error(e);
+            showToast('Image process failed', 'error');
+        }
+    }
+    inputEl.value = '';  // allow re-picking same file
+    renderPickupImgList(which);
+}
+
+function removePickupImage(which, idx) {
+    const arr = which === 'bill' ? pickupBillImages : pickupAadhaarImages;
+    arr.splice(idx, 1);
+    renderPickupImgList(which);
+}
+
+function clearPickupImageState() {
+    pickupBillImages = [];
+    pickupAadhaarImages = [];
+}
+
+
 // ==========================================
 // REASONS
 // ==========================================
@@ -498,11 +601,12 @@ async function loadTodayStats() {
     if (!currentUser) return;
     try {
         const today = new Date().toDateString();
-        const snapshot = await db.ref('pickups').once('value');
+        // 🔥 FIX: Sirf apne agent ka data padho, pura pickups node nahi
+        const snapshot = await db.ref('pickups').orderByChild('agent').equalTo(currentUser.username).once('value');
         const data = snapshot.val() || {};
         let pickup = 0, reject = 0, reschedule = 0;
         Object.values(data).forEach(item => {
-            if (item.agent === currentUser.username && new Date(item.timestamp).toDateString() === today) {
+            if (new Date(item.timestamp).toDateString() === today) {
                 if (item.status === 'pickup') pickup++;
                 else if (item.status === 'rejected') reject++;
                 else if (item.status === 'reschedule') reschedule++;
@@ -520,13 +624,12 @@ async function loadTodayStats() {
 async function loadPendingOrders() {
     if (!currentUser) return;
     try {
-        const snapshot = await db.ref('pending').once('value');
+        // 🔥 FIX: Sirf apne agent ka pending data padho
+        const snapshot = await db.ref('pending').orderByChild('agent').equalTo(currentUser.username).once('value');
         const data = snapshot.val() || {};
         allPendingOrders = [];
-        for (const [orderId, item] of Object.entries(data)) {
-            if (item.agent === currentUser.username) {
-                allPendingOrders.push({ orderId, ...item });
-            }
+        for (const [orderId, item] of Object.entries(data || {})) {
+            allPendingOrders.push({ orderId, ...item });
         }
         allPendingOrders.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
         renderPendingList();
@@ -627,6 +730,7 @@ async function pasteOrderId() {
 // SHOW FORM
 // ==========================================
 function showForm(status) {
+    clearPickupImageState();
     let orderId = document.getElementById('orderId').value.trim().toUpperCase();
     if (!orderId && pendingDoneOrderId) {
         orderId = pendingDoneOrderId;
@@ -686,6 +790,51 @@ function showForm(status) {
             <div>
                 <label class="text-xs font-bold text-gray-500 mb-1.5 block">CUSTOMER NAME <span class="text-gray-400">(Optional)</span></label>
                 <input type="text" id="custName" placeholder="Enter name" class="input-field w-full p-3.5 rounded-xl outline-none">
+            </div>
+
+            <!-- ============ DOCUMENTS (Bill + Aadhaar) ============ -->
+            <div class="pt-2 border-t border-gray-100">
+                <p class="text-xs font-bold text-gray-500 mb-2 tracking-wide">📄 DOCUMENTS <span class="text-gray-400 font-medium">(All Optional)</span></p>
+
+                <div class="mb-3">
+                    <label class="text-xs font-semibold text-gray-500 mb-1 block">Bill Number</label>
+                    <input type="text" id="billNumber" placeholder="Bill / Invoice no." class="input-field w-full p-3 rounded-xl outline-none">
+                </div>
+                <div class="mb-4">
+                    <label class="text-xs font-semibold text-gray-500 mb-1 block">Bill Images <span class="text-gray-400 font-normal">(up to 3)</span></label>
+                    <div class="grid grid-cols-2 gap-2">
+                        <label for="billImageCam" class="btn-bounce cursor-pointer flex items-center justify-center gap-2 p-3 rounded-xl border-2 border-dashed border-blue-300 bg-blue-50 text-blue-700 font-semibold text-sm">
+                            <i data-lucide="camera" class="w-4 h-4"></i> Camera
+                        </label>
+                        <label for="billImageGal" class="btn-bounce cursor-pointer flex items-center justify-center gap-2 p-3 rounded-xl border-2 border-dashed border-blue-300 bg-blue-50 text-blue-700 font-semibold text-sm">
+                            <i data-lucide="image" class="w-4 h-4"></i> Gallery
+                        </label>
+                    </div>
+                    <input id="billImageCam" type="file" accept="image/*" capture="environment" class="hidden" onchange="handlePickupImagePick(this,'bill')">
+                    <input id="billImageGal" type="file" accept="image/*" multiple class="hidden" onchange="handlePickupImagePick(this,'bill')">
+                    <div id="billImgPreview" class="mt-2"></div>
+                    <div id="billImgInfo" class="text-[11px] text-gray-500 mt-1">3 images max · 3 slots free</div>
+                </div>
+
+                <div class="mb-3">
+                    <label class="text-xs font-semibold text-gray-500 mb-1 block">Aadhaar Number</label>
+                    <input type="text" id="aadhaarNumber" placeholder="12-digit Aadhaar" inputmode="numeric" maxlength="14" class="input-field w-full p-3 rounded-xl outline-none font-mono">
+                </div>
+                <div>
+                    <label class="text-xs font-semibold text-gray-500 mb-1 block">Aadhaar Images <span class="text-gray-400 font-normal">(up to 3)</span></label>
+                    <div class="grid grid-cols-2 gap-2">
+                        <label for="aadhaarImageCam" class="btn-bounce cursor-pointer flex items-center justify-center gap-2 p-3 rounded-xl border-2 border-dashed border-indigo-300 bg-indigo-50 text-indigo-700 font-semibold text-sm">
+                            <i data-lucide="camera" class="w-4 h-4"></i> Camera
+                        </label>
+                        <label for="aadhaarImageGal" class="btn-bounce cursor-pointer flex items-center justify-center gap-2 p-3 rounded-xl border-2 border-dashed border-indigo-300 bg-indigo-50 text-indigo-700 font-semibold text-sm">
+                            <i data-lucide="image" class="w-4 h-4"></i> Gallery
+                        </label>
+                    </div>
+                    <input id="aadhaarImageCam" type="file" accept="image/*" capture="environment" class="hidden" onchange="handlePickupImagePick(this,'aadhaar')">
+                    <input id="aadhaarImageGal" type="file" accept="image/*" multiple class="hidden" onchange="handlePickupImagePick(this,'aadhaar')">
+                    <div id="aadhaarImgPreview" class="mt-2"></div>
+                    <div id="aadhaarImgInfo" class="text-[11px] text-gray-500 mt-1">3 images max · 3 slots free</div>
+                </div>
             </div>
         `;
     } else {
@@ -834,6 +983,13 @@ async function submitData() {
         if (hiddenImei2) dbData.imei2 = hiddenImei2;
         dbData.value = parseInt(value);
         dbData.customerName = custName || 'N/A';
+        // Bill / Aadhaar (all optional)
+        const _billNo = (document.getElementById('billNumber')?.value || '').trim();
+        const _aadNo  = (document.getElementById('aadhaarNumber')?.value || '').trim();
+        if (_billNo) dbData.billNumber = _billNo;
+        if (_aadNo)  dbData.aadhaarNumber = _aadNo;
+        if (pickupBillImages.length)    { dbData.billImages = pickupBillImages;    dbData.billImage = pickupBillImages[0]; }
+        if (pickupAadhaarImages.length) { dbData.aadhaarImages = pickupAadhaarImages; dbData.aadhaarImage = pickupAadhaarImages[0]; }
         whatsappMsg = `Order ID: ${orderId}\nStatus: Pickup Completed`;
     } else {
         const phoneModel = document.getElementById('phoneModelRejectReschedule').value.trim();
@@ -1349,7 +1505,8 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('authOverlay').style.display = 'flex';
     }
     if (loggedIn) {
-        db.ref('pending').on('value', () => { loadPendingOrders(); });
+        // 🔥 FIX: .on('value') hataya - ab sirf login pe aur tab switch pe load hoga
+        loadPendingOrders();
         // set today's date for attendance
         const today = new Date().toISOString().split('T')[0];
         document.getElementById('attendanceDateDisplay').textContent = today;
