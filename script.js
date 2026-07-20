@@ -13,7 +13,6 @@ const firebaseConfig = {
 };
 firebase.initializeApp(firebaseConfig);
 const db = firebase.database();
-const storage = firebase.storage(); // <-- new
 
 // ==========================================
 // STATE
@@ -33,146 +32,6 @@ let ocrInterval = null;
 let isOcrScanning = false;
 let ocrAttemptCount = 0;
 let lastDetectedImei = '';
-
-// ========== BILL / AADHAAR IMAGE STATE (URLs, not base64) ==========
-const PICKUP_MAX_IMAGES = 3;
-let pickupBillUrls = [];      // array of download URLs (strings)
-let pickupAadhaarUrls = [];   // array of download URLs (strings)
-
-// Compress image file -> dataURL (we'll later convert to blob for upload)
-function compressImageFile(file, maxDim = 1400, quality = 0.72) {
-    return new Promise((resolve, reject) => {
-        if (!file) return reject('No file');
-        if (!file.type.startsWith('image/')) return reject('Not an image');
-        const reader = new FileReader();
-        reader.onerror = () => reject('Read error');
-        reader.onload = () => {
-            const img = new Image();
-            img.onerror = () => reject('Image decode error');
-            img.onload = () => {
-                let { width, height } = img;
-                if (width > maxDim || height > maxDim) {
-                    if (width > height) { height = Math.round(height * maxDim / width); width = maxDim; }
-                    else                { width  = Math.round(width  * maxDim / height); height = maxDim; }
-                }
-                const canvas = document.createElement('canvas');
-                canvas.width = width; canvas.height = height;
-                const ctx = canvas.getContext('2d');
-                ctx.fillStyle = '#fff';
-                ctx.fillRect(0, 0, width, height);
-                ctx.drawImage(img, 0, 0, width, height);
-                try {
-                    const dataUrl = canvas.toDataURL('image/jpeg', quality);
-                    resolve(dataUrl);
-                } catch (e) { reject(e); }
-            };
-            img.src = reader.result;
-        };
-        reader.readAsDataURL(file);
-    });
-}
-
-// Helper: convert dataURL to Blob
-function dataURLtoBlob(dataUrl) {
-    const parts = dataUrl.split(',');
-    const mime = parts[0].match(/:(.*?);/)[1];
-    const bstr = atob(parts[1]);
-    let n = bstr.length;
-    const u8arr = new Uint8Array(n);
-    while (n--) { u8arr[n] = bstr.charCodeAt(n); }
-    return new Blob([u8arr], { type: mime });
-}
-
-// Upload a compressed dataURL to Firebase Storage and return the download URL
-async function uploadImageToStorage(dataUrl, orderId, which, index) {
-    const blob = dataURLtoBlob(dataUrl);
-    const filePath = `agent_orders/${orderId}/${which}_${Date.now()}_${index}.jpg`;
-    const ref = storage.ref(filePath);
-    await ref.put(blob);
-    const url = await ref.getDownloadURL();
-    return url;
-}
-
-// Render preview thumbnails for pickup images (with remove button per image)
-function renderPickupImgList(which) {
-    const arr = which === 'bill' ? pickupBillUrls : pickupAadhaarUrls;
-    const previewEl = document.getElementById(which === 'bill' ? 'billImgPreview' : 'aadhaarImgPreview');
-    const infoEl = document.getElementById(which === 'bill' ? 'billImgInfo' : 'aadhaarImgInfo');
-    if (!previewEl) return;
-    if (!arr.length) {
-        previewEl.innerHTML = '';
-        if (infoEl) infoEl.textContent = `${PICKUP_MAX_IMAGES} images max · ${PICKUP_MAX_IMAGES} slots free`;
-        return;
-    }
-    previewEl.innerHTML = `<div class="img-preview-grid">` + arr.map((url, i) => {
-        return `<div class="img-preview-item">
-            <img src="${url}" onclick="openImageViewer('${url}','${which} ${i+1}')" alt="image">
-            <button type="button" onclick="removePickupImage('${which}',${i})" class="remove-btn">✕</button>
-            <div class="size-badge">URL</div>
-        </div>`;
-    }).join('') + `</div>`;
-    if (infoEl) infoEl.textContent = `✅ ${arr.length}/${PICKUP_MAX_IMAGES} images uploaded to cloud`;
-}
-
-// Open full-screen image viewer (same as admin)
-function openImageViewer(url, label) {
-    if (!url) return;
-    // Simple Swal popup with image
-    Swal.fire({
-        imageUrl: url,
-        imageAlt: label || 'Image',
-        imageWidth: '90%',
-        imageHeight: 'auto',
-        showCloseButton: true,
-        confirmButtonText: 'Close',
-        confirmButtonColor: '#4f46e5'
-    });
-}
-
-// Handle image pick for pickup form — appends to array (max PICKUP_MAX_IMAGES) and uploads to Storage
-async function handlePickupImagePick(inputEl, which) {
-    const files = inputEl.files ? Array.from(inputEl.files) : [];
-    if (!files.length) return;
-    const arr = which === 'bill' ? pickupBillUrls : pickupAadhaarUrls;
-    const infoEl = document.getElementById(which === 'bill' ? 'billImgInfo' : 'aadhaarImgInfo');
-    if (arr.length >= PICKUP_MAX_IMAGES) {
-        showToast(`Max ${PICKUP_MAX_IMAGES} images allowed`, 'error');
-        inputEl.value = '';
-        return;
-    }
-    const room = PICKUP_MAX_IMAGES - arr.length;
-    const toProcess = files.slice(0, room);
-
-    const orderId = document.getElementById('orderId').value.trim().toUpperCase() || 'temp';
-    if (infoEl) infoEl.textContent = '⏳ Compressing & uploading…';
-
-    for (let i = 0; i < toProcess.length; i++) {
-        const file = toProcess[i];
-        try {
-            const dataUrl = await compressImageFile(file, 1400, 0.72);
-            // Upload to Storage
-            const url = await uploadImageToStorage(dataUrl, orderId, which, i);
-            arr.push(url);
-        } catch (e) {
-            console.error(e);
-            showToast('Image upload failed', 'error');
-        }
-    }
-    inputEl.value = '';
-    renderPickupImgList(which);
-}
-
-function removePickupImage(which, idx) {
-    const arr = which === 'bill' ? pickupBillUrls : pickupAadhaarUrls;
-    arr.splice(idx, 1);
-    renderPickupImgList(which);
-}
-
-function clearPickupImageState() {
-    pickupBillUrls = [];
-    pickupAadhaarUrls = [];
-}
-
 
 // ==========================================
 // REASONS
@@ -216,6 +75,7 @@ function startUserExistenceCheck() {
             logoutUser();
             showToast('🔒 You have been logged out by admin.', 'info');
         }
+        // Check if blocked (only for agents)
         if (data.is_blocked === true && data.role !== 'admin') {
             document.getElementById('blockedOverlay').style.display = 'flex';
         } else {
@@ -264,11 +124,14 @@ async function loginUser() {
         localStorage.setItem('flipkart_agent_user', JSON.stringify(currentUser));
         showMainApp();
         showToast('✅ Welcome, ' + currentUser.name + '!', 'success');
+        // FIX: admin skip attendance
         if (currentUser.role !== 'admin') {
             await checkAttendanceAndBlock();
             loadAttendanceHistory();
         } else {
+            // Hide attendance tab for admin
             document.getElementById('attendanceTabBtn').style.display = 'none';
+            // Ensure blocked overlay is hidden
             document.getElementById('blockedOverlay').style.display = 'none';
         }
         loadTodayStats();
@@ -372,21 +235,27 @@ function showChangePassword() {
 }
 
 // ==========================================
-// ATTENDANCE SYSTEM (Agent Side)
+// ATTENDANCE SYSTEM (Agent Side – No "Later" option)
 // ==========================================
 async function checkAttendanceAndBlock() {
     if (!currentUser) return;
-    if (currentUser.role === 'admin') return;
+    // FIX: if admin, skip attendance entirely
+    if (currentUser.role === 'admin') {
+        return;
+    }
     const today = new Date().toISOString().split('T')[0];
+    // Check if user is blocked
     const userSnap = await db.ref('users/' + currentUser.username + '/is_blocked').once('value');
     if (userSnap.val() === true) {
         showToast('🔒 You are blocked for today. Contact admin.', 'error');
         document.getElementById('blockedOverlay').style.display = 'flex';
         return;
     }
+    // Check attendance
     const attSnap = await db.ref('attendance/' + currentUser.username + '/' + today).once('value');
     const att = attSnap.val();
     if (att && att.status === 'present') {
+        // Already present
         updateAttendanceUI('present');
         return;
     }
@@ -396,6 +265,7 @@ async function checkAttendanceAndBlock() {
         updateAttendanceUI('blocked');
         return;
     }
+    // Show Attendance Prompt (NO "Later" option)
     showAttendancePrompt();
 }
 
@@ -405,7 +275,7 @@ function showAttendancePrompt() {
         text: 'Mark your attendance for today:',
         icon: 'question',
         showDenyButton: true,
-        showCancelButton: false,
+        showCancelButton: false,  // NO "Later" option
         confirmButtonText: '✅ Present',
         denyButtonText: '❌ Not Present',
         confirmButtonColor: '#059669',
@@ -414,8 +284,10 @@ function showAttendancePrompt() {
         allowEscapeKey: false
     }).then(async (result) => {
         if (result.isConfirmed) {
+            // Present -> ask for OTP
             await promptOTP();
         } else if (result.isDenied) {
+            // Not Present -> ask reason and block
             const { value: reason, isConfirmed } = await Swal.fire({
                 title: 'Are you sure?',
                 text: 'If you are not present, you will be BLOCKED for the full day. Salary will be deducted (unless admin unblocks with pay).',
@@ -430,6 +302,7 @@ function showAttendancePrompt() {
             if (isConfirmed && reason) {
                 await markAbsent(reason);
             } else {
+                // If cancelled, ask again (no "Later")
                 showAttendancePrompt();
             }
         }
@@ -454,6 +327,7 @@ async function promptOTP() {
         logoutUser();
         return;
     }
+    // Verify OTP
     const today = new Date().toISOString().split('T')[0];
     const otpSnap = await db.ref('daily_otp/' + today + '/' + currentUser.username).once('value');
     const otpData = otpSnap.val();
@@ -462,6 +336,7 @@ async function promptOTP() {
         promptOTP();
         return;
     }
+    // Mark Present
     await db.ref('attendance/' + currentUser.username + '/' + today).set({
         status: 'present',
         timestamp: Date.now(),
@@ -504,6 +379,7 @@ async function verifyOTP() {
         showToast('❌ Invalid OTP. Try again.', 'error');
         return;
     }
+    // Mark Present
     await db.ref('attendance/' + currentUser.username + '/' + today).set({
         status: 'present',
         timestamp: Date.now(),
@@ -550,6 +426,7 @@ function updateAttendanceUI(status) {
 
 async function loadAttendanceHistory() {
     if (!currentUser) return;
+    // FIX: if admin, don't load history
     if (currentUser.role === 'admin') {
         document.getElementById('attendanceHistory').innerHTML = '<div class="text-sm text-gray-400">Admin has no attendance</div>';
         return;
@@ -750,7 +627,6 @@ async function pasteOrderId() {
 // SHOW FORM
 // ==========================================
 function showForm(status) {
-    clearPickupImageState();
     let orderId = document.getElementById('orderId').value.trim().toUpperCase();
     if (!orderId && pendingDoneOrderId) {
         orderId = pendingDoneOrderId;
@@ -811,51 +687,6 @@ function showForm(status) {
                 <label class="text-xs font-bold text-gray-500 mb-1.5 block">CUSTOMER NAME <span class="text-gray-400">(Optional)</span></label>
                 <input type="text" id="custName" placeholder="Enter name" class="input-field w-full p-3.5 rounded-xl outline-none">
             </div>
-
-            <!-- ============ DOCUMENTS (Bill + Aadhaar) with Storage upload ============ -->
-            <div class="pt-2 border-t border-gray-100">
-                <p class="text-xs font-bold text-gray-500 mb-2 tracking-wide">📄 DOCUMENTS <span class="text-gray-400 font-medium">(All Optional)</span></p>
-
-                <div class="mb-3">
-                    <label class="text-xs font-semibold text-gray-500 mb-1 block">Bill Number</label>
-                    <input type="text" id="billNumber" placeholder="Bill / Invoice no." class="input-field w-full p-3 rounded-xl outline-none">
-                </div>
-                <div class="mb-4">
-                    <label class="text-xs font-semibold text-gray-500 mb-1 block">Bill Images <span class="text-gray-400 font-normal">(up to 3)</span></label>
-                    <div class="grid grid-cols-2 gap-2">
-                        <label for="billImageCam" class="img-upload-btn">
-                            <i data-lucide="camera"></i> Camera
-                        </label>
-                        <label for="billImageGal" class="img-upload-btn">
-                            <i data-lucide="image"></i> Gallery
-                        </label>
-                    </div>
-                    <input id="billImageCam" type="file" accept="image/*" capture="environment" class="hidden" onchange="handlePickupImagePick(this,'bill')">
-                    <input id="billImageGal" type="file" accept="image/*" multiple class="hidden" onchange="handlePickupImagePick(this,'bill')">
-                    <div id="billImgPreview" class="mt-2"></div>
-                    <div id="billImgInfo" class="img-info-text">${PICKUP_MAX_IMAGES} images max · ${PICKUP_MAX_IMAGES} slots free</div>
-                </div>
-
-                <div class="mb-3">
-                    <label class="text-xs font-semibold text-gray-500 mb-1 block">Aadhaar Number</label>
-                    <input type="text" id="aadhaarNumber" placeholder="12-digit Aadhaar" inputmode="numeric" maxlength="14" class="input-field w-full p-3 rounded-xl outline-none font-mono">
-                </div>
-                <div>
-                    <label class="text-xs font-semibold text-gray-500 mb-1 block">Aadhaar Images <span class="text-gray-400 font-normal">(up to 3)</span></label>
-                    <div class="grid grid-cols-2 gap-2">
-                        <label for="aadhaarImageCam" class="img-upload-btn">
-                            <i data-lucide="camera"></i> Camera
-                        </label>
-                        <label for="aadhaarImageGal" class="img-upload-btn">
-                            <i data-lucide="image"></i> Gallery
-                        </label>
-                    </div>
-                    <input id="aadhaarImageCam" type="file" accept="image/*" capture="environment" class="hidden" onchange="handlePickupImagePick(this,'aadhaar')">
-                    <input id="aadhaarImageGal" type="file" accept="image/*" multiple class="hidden" onchange="handlePickupImagePick(this,'aadhaar')">
-                    <div id="aadhaarImgPreview" class="mt-2"></div>
-                    <div id="aadhaarImgInfo" class="img-info-text">${PICKUP_MAX_IMAGES} images max · ${PICKUP_MAX_IMAGES} slots free</div>
-                </div>
-            </div>
         `;
     } else {
         const reasons = (status === 'rejected') ? rejectReasons : rescheduleReasons;
@@ -914,13 +745,14 @@ function selectReason(btn, reason) {
 }
 
 // ==========================================
-// SUBMIT DATA (with Storage URLs)
+// SUBMIT DATA
 // ==========================================
 async function submitData() {
     if (!currentUser) {
         showToast('Please login first', 'error');
         return;
     }
+    // Check if blocked (only for agents)
     if (currentUser.role !== 'admin') {
         const userSnap = await db.ref('users/' + currentUser.username + '/is_blocked').once('value');
         if (userSnap.val() === true) {
@@ -969,6 +801,7 @@ async function submitData() {
         showToast('✅ Password verified!', 'success');
     }
 
+    // Duplicate pickup prevention
     if (exists && existingData.status === 'pickup' && currentStatus === 'pickup') {
         Swal.fire({ icon: 'error', title: 'Already Pickup Completed', text: `Order ${orderId} already marked.`, confirmButtonColor: '#3b82f6' });
         return;
@@ -1001,23 +834,6 @@ async function submitData() {
         if (hiddenImei2) dbData.imei2 = hiddenImei2;
         dbData.value = parseInt(value);
         dbData.customerName = custName || 'N/A';
-
-        // Bill / Aadhaar (all optional) – store URLs arrays
-        const _billNo = (document.getElementById('billNumber')?.value || '').trim();
-        const _aadNo  = (document.getElementById('aadhaarNumber')?.value || '').trim();
-        if (_billNo) dbData.billNumber = _billNo;
-        if (_aadNo)  dbData.aadhaarNumber = _aadNo;
-
-        // Store URL arrays (and legacy single URL for backward compatibility)
-        if (pickupBillUrls.length) {
-            dbData.billImageUrls = pickupBillUrls;
-            dbData.billImage = pickupBillUrls[0]; // legacy
-        }
-        if (pickupAadhaarUrls.length) {
-            dbData.aadhaarImageUrls = pickupAadhaarUrls;
-            dbData.aadhaarImage = pickupAadhaarUrls[0]; // legacy
-        }
-
         whatsappMsg = `Order ID: ${orderId}\nStatus: Pickup Completed`;
     } else {
         const phoneModel = document.getElementById('phoneModelRejectReschedule').value.trim();
@@ -1139,7 +955,7 @@ async function submitData() {
 }
 
 // ==========================================
-// SCANNER FUNCTIONS (Barcode + OCR) - unchanged
+// SCANNER FUNCTIONS (Barcode + OCR)
 // ==========================================
 function setScanMode(mode) {
     scanMode = mode;
@@ -1519,7 +1335,12 @@ function getISTDateTime() {
 // INIT
 // ==========================================
 document.addEventListener('DOMContentLoaded', () => {
-    // Blocked overlay already in HTML
+    // Add blocked overlay to body
+    const overlay = document.createElement('div');
+    overlay.id = 'blockedOverlay';
+    overlay.style.cssText = 'display:none; position:fixed; inset:0; background:rgba(0,0,0,0.8); z-index:9999; align-items:center; justify-content:center; color:white; font-size:20px; font-weight:bold; flex-direction:column; padding:20px; text-align:center;';
+    overlay.innerHTML = `<i data-lucide="lock" class="w-16 h-16 text-red-500 mb-4"></i><p>🔒 You are blocked for today.</p><p class="text-sm text-gray-400 mt-2">Contact admin to unblock.</p><button onclick="logoutUser()" class="mt-4 bg-red-600 px-6 py-3 rounded-xl">Logout</button>`;
+    document.body.appendChild(overlay);
     lucide.createIcons();
 
     document.getElementById('offlineBanner').classList.add('hidden');
@@ -1529,8 +1350,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (loggedIn) {
         db.ref('pending').on('value', () => { loadPendingOrders(); });
+        // set today's date for attendance
         const today = new Date().toISOString().split('T')[0];
         document.getElementById('attendanceDateDisplay').textContent = today;
+        // Set default tab
         switchTab('pickup');
     }
     document.getElementById('loginPassword').addEventListener('keydown', (e) => {
