@@ -178,9 +178,19 @@ function startUserExistenceCheck() {
             logoutUser();
             showToast('🔒 You have been logged out by admin.', 'info');
         }
-        // Check if blocked (only for agents)
+        // Check if blocked (only for agents) – but we will auto-unblock if date mismatch
         if (data.is_blocked === true && data.role !== 'admin') {
-            document.getElementById('blockedOverlay').style.display = 'flex';
+            // Check if block is for today
+            const today = new Date().toISOString().split('T')[0];
+            const blockedDate = data.blocked_date || '';
+            if (blockedDate !== today) {
+                // Auto-unblock if block date is not today
+                userRef.update({ is_blocked: false, blocked_date: null }).catch(() => {});
+                document.getElementById('blockedOverlay').style.display = 'none';
+                showToast('🔓 Auto-unblocked (new day)', 'info');
+            } else {
+                document.getElementById('blockedOverlay').style.display = 'flex';
+            }
         } else {
             document.getElementById('blockedOverlay').style.display = 'none';
         }
@@ -347,13 +357,30 @@ async function checkAttendanceAndBlock() {
         return;
     }
     const today = new Date().toISOString().split('T')[0];
-    // Check if user is blocked
-    const userSnap = await db.ref('users/' + currentUser.username + '/is_blocked').once('value');
-    if (userSnap.val() === true) {
+    
+    // 🔥 FIX: Auto-unblock if block was from a previous day
+    const userSnap = await db.ref('users/' + currentUser.username).once('value');
+    const userData = userSnap.val() || {};
+    const isBlocked = userData.is_blocked === true;
+    const blockedDate = userData.blocked_date || '';
+    
+    if (isBlocked && blockedDate !== today) {
+        // Unblock automatically
+        await db.ref('users/' + currentUser.username + '/is_blocked').set(false);
+        await db.ref('users/' + currentUser.username + '/blocked_date').set(null);
+        showToast('🔓 Auto-unblocked (new day)', 'info');
+        document.getElementById('blockedOverlay').style.display = 'none';
+        // Continue to check today's attendance
+    }
+    
+    // Check if user is blocked for today
+    const freshUserSnap = await db.ref('users/' + currentUser.username + '/is_blocked').once('value');
+    if (freshUserSnap.val() === true) {
         showToast('🔒 You are blocked for today. Contact admin.', 'error');
         document.getElementById('blockedOverlay').style.display = 'flex';
         return;
     }
+    
     // Check attendance
     const attSnap = await db.ref('attendance/' + currentUser.username + '/' + today).once('value');
     const att = attSnap.val();
@@ -461,7 +488,11 @@ async function markAbsent(reason) {
         blocked: true,
         salary_counted: false
     });
-    await db.ref('users/' + currentUser.username + '/is_blocked').set(true);
+    // 🔥 FIX: Store blocked_date so auto-unblock can work next day
+    await db.ref('users/' + currentUser.username).update({
+        is_blocked: true,
+        blocked_date: today
+    });
     showToast('🔒 You have been blocked for the day.', 'error');
     document.getElementById('blockedOverlay').style.display = 'flex';
     updateAttendanceUI('blocked');
