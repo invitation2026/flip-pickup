@@ -41,7 +41,9 @@ let pickupAadhaarImages = [];   // array of compressed base64 dataURLs
 
 // Compress image file -> JPEG dataURL (ULTRA-OPTIMIZED: max 720px, quality 0.4)
 // Target ~10-20 KB per image — Firebase free tier chalega 3-4+ saal @ 100 orders/day
-function compressImageFile(file, maxDim = 720, quality = 0.4) {
+// Compress image file -> JPEG dataURL (OPTIMIZED: max 1200px, quality 0.7 for clear images)
+// Target ~50-80 KB per image — Firebase free tier mein 1 MB limit se safe hai
+function compressImageFile(file, maxDim = 1200, quality = 0.7) {
     return new Promise((resolve, reject) => {
         if (!file) return reject('No file');
         if (!file.type.startsWith('image/')) return reject('Not an image');
