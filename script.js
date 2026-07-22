@@ -15,6 +15,17 @@ firebase.initializeApp(firebaseConfig);
 const db = firebase.database();
 
 // ==========================================
+// HELPER: Get today's date in local timezone (YYYY-MM-DD)
+// ==========================================
+function getLocalDate() {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
+
+// ==========================================
 // STATE
 // ==========================================
 let currentUser = null;
@@ -39,8 +50,6 @@ const PICKUP_MAX_IMAGES = 3;
 let pickupBillImages = [];      // array of compressed base64 dataURLs
 let pickupAadhaarImages = [];   // array of compressed base64 dataURLs
 
-// Compress image file -> JPEG dataURL (ULTRA-OPTIMIZED: max 720px, quality 0.4)
-// Target ~10-20 KB per image — Firebase free tier chalega 3-4+ saal @ 100 orders/day
 // Compress image file -> JPEG dataURL (OPTIMIZED: max 1200px, quality 0.7 for clear images)
 // Target ~50-80 KB per image — Firebase free tier mein 1 MB limit se safe hai
 function compressImageFile(file, maxDim = 1200, quality = 0.7) {
@@ -160,7 +169,7 @@ const rescheduleReasons = [
 ];
 
 // ==========================================
-// USER LISTENER (Real-time – delete/force logout)
+// USER LISTENER (Real-time – delete/force logout + auto-unblock)
 // ==========================================
 let userListenerRef = null;
 
@@ -180,13 +189,11 @@ function startUserExistenceCheck() {
             logoutUser();
             showToast('🔒 You have been logged out by admin.', 'info');
         }
-        // Check if blocked (only for agents) – but we will auto-unblock if date mismatch
+        // Check if blocked – auto-unblock if date mismatch
         if (data.is_blocked === true && data.role !== 'admin') {
-            // Check if block is for today
-            const today = new Date().toISOString().split('T')[0];
+            const today = getLocalDate();  // 🔥 Local date
             const blockedDate = data.blocked_date || '';
             if (blockedDate !== today) {
-                // Auto-unblock if block date is not today
                 userRef.update({ is_blocked: false, blocked_date: null }).catch(() => {});
                 document.getElementById('blockedOverlay').style.display = 'none';
                 showToast('🔓 Auto-unblocked (new day)', 'info');
@@ -239,14 +246,11 @@ async function loginUser() {
         localStorage.setItem('flipkart_agent_user', JSON.stringify(currentUser));
         showMainApp();
         showToast('✅ Welcome, ' + currentUser.name + '!', 'success');
-        // FIX: admin skip attendance
         if (currentUser.role !== 'admin') {
             await checkAttendanceAndBlock();
             loadAttendanceHistory();
         } else {
-            // Hide attendance tab for admin
             document.getElementById('attendanceTabBtn').style.display = 'none';
-            // Ensure blocked overlay is hidden
             document.getElementById('blockedOverlay').style.display = 'none';
         }
         loadTodayStats();
@@ -350,31 +354,29 @@ function showChangePassword() {
 }
 
 // ==========================================
-// ATTENDANCE SYSTEM (Agent Side – No "Later" option)
+// ATTENDANCE SYSTEM (Agent Side – No "Later" option, local date)
 // ==========================================
 async function checkAttendanceAndBlock() {
     if (!currentUser) return;
-    // FIX: if admin, skip attendance entirely
     if (currentUser.role === 'admin') {
         return;
     }
-    const today = new Date().toISOString().split('T')[0];
-    
-    // 🔥 FIX: Auto-unblock if block was from a previous day
+    const today = getLocalDate();  // 🔥 Local date
+
+    // Auto-unblock if block was from a previous day
     const userSnap = await db.ref('users/' + currentUser.username).once('value');
     const userData = userSnap.val() || {};
     const isBlocked = userData.is_blocked === true;
     const blockedDate = userData.blocked_date || '';
-    
+
     if (isBlocked && blockedDate !== today) {
-        // Unblock automatically
         await db.ref('users/' + currentUser.username + '/is_blocked').set(false);
         await db.ref('users/' + currentUser.username + '/blocked_date').set(null);
         showToast('🔓 Auto-unblocked (new day)', 'info');
         document.getElementById('blockedOverlay').style.display = 'none';
         // Continue to check today's attendance
     }
-    
+
     // Check if user is blocked for today
     const freshUserSnap = await db.ref('users/' + currentUser.username + '/is_blocked').once('value');
     if (freshUserSnap.val() === true) {
@@ -382,12 +384,11 @@ async function checkAttendanceAndBlock() {
         document.getElementById('blockedOverlay').style.display = 'flex';
         return;
     }
-    
+
     // Check attendance
     const attSnap = await db.ref('attendance/' + currentUser.username + '/' + today).once('value');
     const att = attSnap.val();
     if (att && att.status === 'present') {
-        // Already present
         updateAttendanceUI('present');
         return;
     }
@@ -397,7 +398,6 @@ async function checkAttendanceAndBlock() {
         updateAttendanceUI('blocked');
         return;
     }
-    // Show Attendance Prompt (NO "Later" option)
     showAttendancePrompt();
 }
 
@@ -416,10 +416,8 @@ function showAttendancePrompt() {
         allowEscapeKey: false
     }).then(async (result) => {
         if (result.isConfirmed) {
-            // Present -> ask for OTP
             await promptOTP();
         } else if (result.isDenied) {
-            // Not Present -> ask reason and block
             const { value: reason, isConfirmed } = await Swal.fire({
                 title: 'Are you sure?',
                 text: 'If you are not present, you will be BLOCKED for the full day. Salary will be deducted (unless admin unblocks with pay).',
@@ -434,7 +432,6 @@ function showAttendancePrompt() {
             if (isConfirmed && reason) {
                 await markAbsent(reason);
             } else {
-                // If cancelled, ask again (no "Later")
                 showAttendancePrompt();
             }
         }
@@ -459,8 +456,7 @@ async function promptOTP() {
         logoutUser();
         return;
     }
-    // Verify OTP
-    const today = new Date().toISOString().split('T')[0];
+    const today = getLocalDate();  // 🔥 Local date
     const otpSnap = await db.ref('daily_otp/' + today + '/' + currentUser.username).once('value');
     const otpData = otpSnap.val();
     if (!otpData || otpData.otp !== otp) {
@@ -468,7 +464,6 @@ async function promptOTP() {
         promptOTP();
         return;
     }
-    // Mark Present
     await db.ref('attendance/' + currentUser.username + '/' + today).set({
         status: 'present',
         timestamp: Date.now(),
@@ -482,7 +477,7 @@ async function promptOTP() {
 }
 
 async function markAbsent(reason) {
-    const today = new Date().toISOString().split('T')[0];
+    const today = getLocalDate();  // 🔥 Local date
     await db.ref('attendance/' + currentUser.username + '/' + today).set({
         status: 'absent',
         reason: reason,
@@ -490,7 +485,6 @@ async function markAbsent(reason) {
         blocked: true,
         salary_counted: false
     });
-    // 🔥 FIX: Store blocked_date so auto-unblock can work next day
     await db.ref('users/' + currentUser.username).update({
         is_blocked: true,
         blocked_date: today
@@ -508,14 +502,13 @@ async function verifyOTP() {
         showToast('Please enter 6-digit OTP', 'error');
         return;
     }
-    const today = new Date().toISOString().split('T')[0];
+    const today = getLocalDate();  // 🔥 Local date
     const otpSnap = await db.ref('daily_otp/' + today + '/' + currentUser.username).once('value');
     const otpData = otpSnap.val();
     if (!otpData || otpData.otp !== otp) {
         showToast('❌ Invalid OTP. Try again.', 'error');
         return;
     }
-    // Mark Present
     await db.ref('attendance/' + currentUser.username + '/' + today).set({
         status: 'present',
         timestamp: Date.now(),
@@ -531,7 +524,7 @@ async function verifyOTP() {
 
 async function refreshOTP() {
     if (!currentUser) return;
-    const today = new Date().toISOString().split('T')[0];
+    const today = getLocalDate();  // 🔥 Local date
     const otpSnap = await db.ref('daily_otp/' + today + '/' + currentUser.username).once('value');
     const otpData = otpSnap.val();
     if (otpData && otpData.otp) {
@@ -562,7 +555,6 @@ function updateAttendanceUI(status) {
 
 async function loadAttendanceHistory() {
     if (!currentUser) return;
-    // FIX: if admin, don't load history
     if (currentUser.role === 'admin') {
         document.getElementById('attendanceHistory').innerHTML = '<div class="text-sm text-gray-400">Admin has no attendance</div>';
         return;
@@ -570,7 +562,7 @@ async function loadAttendanceHistory() {
     const container = document.getElementById('attendanceHistory');
     container.innerHTML = '<div class="text-sm text-gray-400 text-center">Loading...</div>';
     try {
-        const today = new Date();
+        const today = new Date();  // for history, UTC is okay
         let html = '';
         for (let i = 0; i < 7; i++) {
             const d = new Date(today);
@@ -634,7 +626,6 @@ async function loadTodayStats() {
     if (!currentUser) return;
     try {
         const today = new Date().toDateString();
-        // 🔥 FIX: Sirf apne agent ka data padho, pura pickups node nahi
         const snapshot = await db.ref('pickups').orderByChild('agent').equalTo(currentUser.username).once('value');
         const data = snapshot.val() || {};
         let pickup = 0, reject = 0, reschedule = 0;
@@ -657,7 +648,6 @@ async function loadTodayStats() {
 async function loadPendingOrders() {
     if (!currentUser) return;
     try {
-        // 🔥 FIX: Sirf apne agent ka pending data padho
         const snapshot = await db.ref('pending').orderByChild('agent').equalTo(currentUser.username).once('value');
         const data = snapshot.val() || {};
         allPendingOrders = [];
@@ -934,7 +924,6 @@ async function submitData() {
         showToast('Please login first', 'error');
         return;
     }
-    // Check if blocked (only for agents)
     if (currentUser.role !== 'admin') {
         const userSnap = await db.ref('users/' + currentUser.username + '/is_blocked').once('value');
         if (userSnap.val() === true) {
@@ -955,7 +944,6 @@ async function submitData() {
         return;
     }
 
-    // Password required for rejected -> pickup
     if (exists && existingData.status === 'rejected' && currentStatus === 'pickup') {
         const { value: password, isConfirmed } = await Swal.fire({
             title: '🔐 Admin Password Required',
@@ -983,7 +971,6 @@ async function submitData() {
         showToast('✅ Password verified!', 'success');
     }
 
-    // Duplicate pickup prevention
     if (exists && existingData.status === 'pickup' && currentStatus === 'pickup') {
         Swal.fire({ icon: 'error', title: 'Already Pickup Completed', text: `Order ${orderId} already marked.`, confirmButtonColor: '#3b82f6' });
         return;
@@ -1016,7 +1003,6 @@ async function submitData() {
         if (hiddenImei2) dbData.imei2 = hiddenImei2;
         dbData.value = parseInt(value);
         dbData.customerName = custName || 'N/A';
-        // Bill / Aadhaar (all optional)
         const _billNo = (document.getElementById('billNumber')?.value || '').trim();
         const _aadNo  = (document.getElementById('aadhaarNumber')?.value || '').trim();
         if (_billNo) dbData.billNumber = _billNo;
@@ -1524,7 +1510,6 @@ function getISTDateTime() {
 // INIT
 // ==========================================
 document.addEventListener('DOMContentLoaded', () => {
-    // Add blocked overlay to body
     const overlay = document.createElement('div');
     overlay.id = 'blockedOverlay';
     overlay.style.cssText = 'display:none; position:fixed; inset:0; background:rgba(0,0,0,0.8); z-index:9999; align-items:center; justify-content:center; color:white; font-size:20px; font-weight:bold; flex-direction:column; padding:20px; text-align:center;';
@@ -1538,12 +1523,9 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('authOverlay').style.display = 'flex';
     }
     if (loggedIn) {
-        // 🔥 FIX: .on('value') hataya - ab sirf login pe aur tab switch pe load hoga
         loadPendingOrders();
-        // set today's date for attendance
-        const today = new Date().toISOString().split('T')[0];
+        const today = getLocalDate();
         document.getElementById('attendanceDateDisplay').textContent = today;
-        // Set default tab
         switchTab('pickup');
     }
     document.getElementById('loginPassword').addEventListener('keydown', (e) => {
