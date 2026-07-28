@@ -1,3 +1,4 @@
+<!-- === SECTION 1: DOCTYPE, HTML ROOT & META TAGS === -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -6,6 +7,7 @@
     <meta name="theme-color" content="#1e3a8a" />
     <title>Flipkart Pickup Agent</title>
 
+    <!-- === SECTION 2: EXTERNAL SCRIPTS & LIBRARIES (CDN) === -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
@@ -19,6 +21,7 @@
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
 
+    <!-- === SECTION 3: GLOBAL & ORIGINAL STYLES (CSS) === -->
     <style>
         /* ===== ORIGINAL STYLES ===== */
         * { -webkit-tap-highlight-color: transparent; }
@@ -618,6 +621,8 @@
         .attendance-history .day-item .status.not-marked { color: #94a3b8; }
     </style>
 </head>
+
+<!-- === SECTION 4: BODY START, OFFLINE BANNER & AUTH OVERLAY (LOGIN) === -->
 <body class="no-scrollbar">
 
     <!-- Offline Banner -->
@@ -647,6 +652,7 @@
         </div>
     </div>
 
+    <!-- === SECTION 5: MAIN APP HEADER === -->
     <!-- ===== MAIN APP ===== -->
     <div id="mainApp" class="max-w-md mx-auto min-h-screen pb-8" style="display:none;">
 
@@ -684,6 +690,7 @@
         <!-- Content Area -->
         <div class="px-4 py-5">
 
+            <!-- === SECTION 6: TAB BAR NAVIGATION === -->
             <!-- ===== TAB BAR: Pickup | Pending | Attendance ===== -->
             <div class="tab-bar mb-4" id="mainTabBar">
                 <button class="active" data-tab="pickup" onclick="switchTab('pickup')">
@@ -699,6 +706,7 @@
                 </button>
             </div>
 
+            <!-- === SECTION 7: TAB CONTENT - PICKUP (Order ID, Status, Stats, Dynamic Form) === -->
             <!-- ===== TAB: PICKUP ===== -->
             <div id="tab-pickup" class="tab-content">
                 <!-- STEP 1: Order ID + Status Selection -->
@@ -823,6 +831,7 @@
                 </div>
             </div>
 
+            <!-- === SECTION 8: TAB CONTENT - PENDING ORDERS === -->
             <!-- ===== TAB: PENDING ===== -->
             <div id="tab-pending" class="tab-content" style="display:none;">
                 <div class="glass rounded-2xl p-5 shadow-xl">
@@ -858,6 +867,7 @@
                 </div>
             </div>
 
+            <!-- === SECTION 9: TAB CONTENT - ATTENDANCE === -->
             <!-- ===== TAB: ATTENDANCE ===== -->
             <div id="tab-attendance" class="tab-content" style="display:none;">
                 <div class="glass rounded-2xl p-5 shadow-xl space-y-4">
@@ -899,6 +909,7 @@
         </div>
     </div>
 
+    <!-- === SECTION 10: SCANNER MODAL (IMEI/OCR) === -->
     <!-- Scanner Modal (unchanged) -->
     <div id="scannerModal" class="hidden fixed inset-0 scanner-overlay z-50 flex items-center justify-center p-4">
         <div class="bg-white rounded-3xl p-5 w-full max-w-sm shadow-2xl">
@@ -968,6 +979,7 @@
         </div>
     </div>
 
+    <!-- === SECTION 11: EXTERNAL SCRIPT LINK & CLOSING TAGS === -->
     <script src="script.js"></script>
 
 </body>

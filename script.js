@@ -1,3 +1,4 @@
+// === SECTION 1: FIREBASE CONFIG ===
 // ==========================================
 // FIREBASE CONFIG
 // ==========================================
@@ -14,6 +15,7 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 const db = firebase.database();
 
+// === SECTION 2: HELPER FUNCTIONS (getLocalDate) ===
 // ==========================================
 // HELPER: Get today's date in local timezone (YYYY-MM-DD)
 // ==========================================
@@ -25,6 +27,7 @@ function getLocalDate() {
     return `${year}-${month}-${day}`;
 }
 
+// === SECTION 3: GLOBAL STATE ===
 // ==========================================
 // STATE
 // ==========================================
@@ -50,6 +53,7 @@ const PICKUP_MAX_IMAGES = 3;
 let pickupBillImages = [];      // array of compressed base64 dataURLs
 let pickupAadhaarImages = [];   // array of compressed base64 dataURLs
 
+// === SECTION 4: IMAGE HANDLING (compress, render, pick, remove, clear) ===
 // Compress image file -> JPEG dataURL (OPTIMIZED: max 1200px, quality 0.7 for clear images)
 // Target ~50-80 KB per image — Firebase free tier mein 1 MB limit se safe hai
 function compressImageFile(file, maxDim = 1200, quality = 0.7) {
@@ -146,7 +150,7 @@ function clearPickupImageState() {
     pickupAadhaarImages = [];
 }
 
-
+// === SECTION 5: REASONS (reject and reschedule) ===
 // ==========================================
 // REASONS
 // ==========================================
@@ -168,6 +172,7 @@ const rescheduleReasons = [
     { text: 'Other reason', icon: 'more-horizontal' }
 ];
 
+// === SECTION 6: USER LISTENER (real-time existence & auto-unblock) ===
 // ==========================================
 // USER LISTENER (Real-time – delete/force logout + auto-unblock)
 // ==========================================
@@ -184,11 +189,21 @@ function startUserExistenceCheck() {
             return;
         }
         const data = snapshot.val();
+        
+        // 🔥 NEW: Check if account is deactivated (left by admin)
+        if (data.is_active === false) {
+            logoutUser();
+            showToast('🔒 Your account has been deactivated (employee left).', 'error');
+            return;
+        }
+        
         if (data.forceLogout === true) {
             userRef.update({ forceLogout: null }).catch(() => {});
             logoutUser();
             showToast('🔒 You have been logged out by admin.', 'info');
+            return;
         }
+        
         // Check if blocked – auto-unblock if date mismatch
         if (data.is_blocked === true && data.role !== 'admin') {
             const today = getLocalDate();  // 🔥 Local date
@@ -214,9 +229,9 @@ function stopUserExistenceCheck() {
     }
 }
 
-// ==========================================
-// AUTH FUNCTIONS
-// ==========================================
+// ================================================================
+// SECTION 7: AUTHENTICATION FUNCTIONS
+// ================================================================
 async function loginUser() {
     const username = document.getElementById('loginUsername').value.trim().toLowerCase();
     const password = document.getElementById('loginPassword').value.trim();
@@ -239,6 +254,12 @@ async function loginUser() {
         const userData = snap.val();
         if (userData.password !== password) {
             errorEl.textContent = 'Incorrect password.';
+            errorEl.style.display = 'block';
+            return;
+        }
+        // 🔥 NEW: Check if account is active
+        if (userData.is_active === false) {
+            errorEl.textContent = '❌ Account disabled (employee left). Contact admin.';
             errorEl.style.display = 'block';
             return;
         }
@@ -280,6 +301,14 @@ function checkAuth() {
             currentUser = JSON.parse(stored);
             verifyUserExists(currentUser.username).then(async exists => {
                 if (exists) {
+                    // 🔥 NEW: Check if account is still active
+                    const userSnap = await db.ref('users/' + currentUser.username).once('value');
+                    const userData = userSnap.val();
+                    if (userData && userData.is_active === false) {
+                        logoutUser();
+                        showToast('🔒 Your account has been deactivated (left).', 'error');
+                        return;
+                    }
                     showMainApp();
                     if (currentUser.role !== 'admin') {
                         await checkAttendanceAndBlock();
@@ -317,6 +346,7 @@ function showMainApp() {
     startUserExistenceCheck();
 }
 
+// === SECTION 8: CHANGE PASSWORD ===
 // ==========================================
 // CHANGE PASSWORD
 // ==========================================
@@ -353,6 +383,7 @@ function showChangePassword() {
     });
 }
 
+// === SECTION 9: ATTENDANCE SYSTEM ===
 // ==========================================
 // ATTENDANCE SYSTEM (Agent Side – No "Later" option, local date)
 // ==========================================
@@ -585,6 +616,7 @@ async function loadAttendanceHistory() {
     }
 }
 
+// === SECTION 10: TAB SWITCHING ===
 // ==========================================
 // TAB SWITCHING
 // ==========================================
@@ -598,6 +630,7 @@ function switchTab(tab) {
     if (tab === 'attendance') { loadAttendanceHistory(); updateAttendanceUI(); }
 }
 
+// === SECTION 11: OFFLINE DETECTION ===
 // ==========================================
 // OFFLINE DETECTION
 // ==========================================
@@ -619,6 +652,7 @@ function setupOfflineDetection() {
     updateStatus();
 }
 
+// === SECTION 12: TODAY'S STATS ===
 // ==========================================
 // TODAY'S STATS
 // ==========================================
@@ -642,6 +676,7 @@ async function loadTodayStats() {
     } catch (e) { console.log(e); }
 }
 
+// === SECTION 13: PENDING ORDERS ===
 // ==========================================
 // PENDING ORDERS
 // ==========================================
@@ -736,6 +771,7 @@ function markPendingDone(orderId) {
     showToast(`📦 Pending order ${orderId} — fill pickup details`, 'info');
 }
 
+// === SECTION 14: PASTE ORDER ID ===
 // ==========================================
 // PASTE ORDER ID
 // ==========================================
@@ -749,6 +785,7 @@ async function pasteOrderId() {
     }
 }
 
+// === SECTION 15: SHOW FORM (dynamic form generation) ===
 // ==========================================
 // SHOW FORM
 // ==========================================
@@ -916,6 +953,7 @@ function selectReason(btn, reason) {
     }
 }
 
+// === SECTION 16: SUBMIT DATA ===
 // ==========================================
 // SUBMIT DATA
 // ==========================================
@@ -1129,6 +1167,7 @@ async function submitData() {
     }
 }
 
+// === SECTION 17: SCANNER FUNCTIONS (Barcode + OCR) ===
 // ==========================================
 // SCANNER FUNCTIONS (Barcode + OCR)
 // ==========================================
@@ -1470,6 +1509,7 @@ function stopScanner() {
     lucide.createIcons();
 }
 
+// === SECTION 18: TOAST ===
 // ==========================================
 // TOAST
 // ==========================================
@@ -1486,6 +1526,7 @@ function showToast(message, type = 'info') {
     }, 2800);
 }
 
+// === SECTION 19: IST DATE/TIME FORMATTER ===
 // ==========================================
 // GET IST DATE/TIME
 // ==========================================
@@ -1506,6 +1547,7 @@ function getISTDateTime() {
     return `${dd}-${mmm}-${yyyy}, ${hh}:${minutes}:${seconds} ${ampm} IST`;
 }
 
+// === SECTION 20: INITIALIZATION (DOMContentLoaded) ===
 // ==========================================
 // INIT
 // ==========================================
