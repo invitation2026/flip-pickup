@@ -14,6 +14,7 @@ const firebaseConfig = {
 };
 firebase.initializeApp(firebaseConfig);
 const db = firebase.database();
+const storage = firebase.storage();   // 🔥 YEH LINE ADD KI;
 
 // === SECTION 2: HELPER FUNCTIONS (getLocalDate) ===
 // ==========================================
