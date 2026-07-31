@@ -48,6 +48,70 @@ let isOcrScanning = false;
 let ocrAttemptCount = 0;
 let lastDetectedImei = '';
 
+// ========== 🔥 SPEC (RAM / STORAGE / NETWORK) STATE ==========
+let selectedRam = '';
+let selectedStorage = '';
+let selectedNetwork = '';
+const RAM_OPTIONS = ['1GB','2GB','3GB','4GB','6GB','8GB','12GB','16GB','18GB','24GB'];
+const STORAGE_OPTIONS = ['8GB','16GB','32GB','64GB','128GB','256GB','512GB','1TB','2TB'];
+const NETWORK_OPTIONS = ['2G','3G','4G','5G'];
+
+function resetSpecSelection() {
+    selectedRam = '';
+    selectedStorage = '';
+    selectedNetwork = '';
+}
+
+function buildSpecChips(kind, options, extraClass) {
+    return options.map(o =>
+        `<button type="button" class="spec-chip ${extraClass || ''}" data-kind="${kind}" data-val="${o}" onclick="selectSpec('${kind}','${o}',this)">${o}</button>`
+    ).join('');
+}
+
+function selectSpec(kind, val, el) {
+    // toggle off if same chip tapped again
+    const group = el.parentElement;
+    const already = el.classList.contains('active');
+    group.querySelectorAll('.spec-chip').forEach(b => b.classList.remove('active'));
+    const finalVal = already ? '' : val;
+    if (!already) el.classList.add('active');
+    if (kind === 'ram') selectedRam = finalVal;
+    if (kind === 'storage') selectedStorage = finalVal;
+    if (kind === 'network') selectedNetwork = finalVal;
+    if (navigator.vibrate) { try { navigator.vibrate(12); } catch(_){} }
+    updateSpecUI();
+}
+
+function updateSpecUI() {
+    const ramPick = document.getElementById('ramPick');
+    const stoPick = document.getElementById('storagePick');
+    const netPick = document.getElementById('networkPick');
+    if (ramPick) { ramPick.textContent = selectedRam || 'Not selected'; ramPick.className = 'picked' + (selectedRam ? '' : ' empty'); }
+    if (stoPick) { stoPick.textContent = selectedStorage || 'Not selected'; stoPick.className = 'picked' + (selectedStorage ? '' : ' empty'); }
+    if (netPick) { netPick.textContent = selectedNetwork || 'Not selected'; netPick.className = 'picked' + (selectedNetwork ? '' : ' empty'); }
+
+    const ramStorageInput = document.getElementById('ramStorage');
+    const networkInput = document.getElementById('networkType');
+    const combo = (selectedRam && selectedStorage) ? (selectedRam + '/' + selectedStorage) : '';
+    if (ramStorageInput) ramStorageInput.value = combo;
+    if (networkInput) networkInput.value = selectedNetwork;
+
+    const box = document.getElementById('specSummary');
+    if (!box) return;
+    const done = selectedRam && selectedStorage && selectedNetwork;
+    box.className = 'spec-summary' + (done ? ' ok' : '');
+    const missing = [];
+    if (!selectedRam) missing.push('RAM');
+    if (!selectedStorage) missing.push('Storage');
+    if (!selectedNetwork) missing.push('Network');
+    box.innerHTML = `
+        <div class="head">SELECTED DEVICE SPECS</div>
+        <div class="body">${selectedRam || '—'} RAM &nbsp;·&nbsp; ${selectedStorage || '—'} Storage &nbsp;·&nbsp; ${selectedNetwork || '—'}</div>
+        ${done ? '' : `<div class="spec-missing">⚠️ Please select: ${missing.join(', ')}</div>`}
+    `;
+}
+
+
 // ========== BILL / AADHAAR IMAGE STATE (Pickup) ==========
 // Multi-image support (max 3 per document)
 const PICKUP_MAX_IMAGES = 3;
@@ -55,9 +119,9 @@ let pickupBillImages = [];      // array of compressed base64 dataURLs
 let pickupAadhaarImages = [];   // array of compressed base64 dataURLs
 
 // === SECTION 4: IMAGE HANDLING (compress, render, pick, remove, clear) ===
-// Compress image file -> JPEG dataURL (OPTIMIZED: max 1200px, quality 0.7 for clear images)
-// Target ~50-80 KB per image — Firebase free tier mein 1 MB limit se safe hai
-function compressImageFile(file, maxDim = 1200, quality = 0.7) {
+// 🔥 FIX: Compression optimized - max 800px, quality 0.55
+// Target ~20-50 KB per image instead of 150-300 KB
+function compressImageFile(file, maxDim = 800, quality = 0.55) {
     return new Promise((resolve, reject) => {
         if (!file) return reject('No file');
         if (!file.type.startsWith('image/')) return reject('Not an image');
@@ -68,12 +132,14 @@ function compressImageFile(file, maxDim = 1200, quality = 0.7) {
             img.onerror = () => reject('Image decode error');
             img.onload = () => {
                 let { width, height } = img;
-                if (width > maxDim || height > maxDim) {
-                    if (width > height) { height = Math.round(height * maxDim / width); width = maxDim; }
-                    else                { width  = Math.round(width  * maxDim / height); height = maxDim; }
+                if (width > height) {
+                    if (width > maxDim) { height = Math.round(height * maxDim / width); width = maxDim; }
+                } else {
+                    if (height > maxDim) { width = Math.round(width * maxDim / height); height = maxDim; }
                 }
                 const canvas = document.createElement('canvas');
-                canvas.width = width; canvas.height = height;
+                canvas.width = width;
+                canvas.height = height;
                 const ctx = canvas.getContext('2d');
                 ctx.fillStyle = '#fff';
                 ctx.fillRect(0, 0, width, height);
@@ -89,7 +155,6 @@ function compressImageFile(file, maxDim = 1200, quality = 0.7) {
     });
 }
 
-// Render preview thumbnails for pickup images (with remove button per image)
 function renderPickupImgList(which) {
     const arr = which === 'bill' ? pickupBillImages : pickupAadhaarImages;
     const previewEl = document.getElementById(which === 'bill' ? 'billImgPreview' : 'aadhaarImgPreview');
@@ -113,7 +178,6 @@ function renderPickupImgList(which) {
     if (infoEl) infoEl.textContent = `✅ ${arr.length}/${PICKUP_MAX_IMAGES} · total ~${totalKB} KB`;
 }
 
-// Handle image pick for pickup form — appends to array (max PICKUP_MAX_IMAGES)
 async function handlePickupImagePick(inputEl, which) {
     const files = inputEl.files ? Array.from(inputEl.files) : [];
     if (!files.length) return;
@@ -136,7 +200,7 @@ async function handlePickupImagePick(inputEl, which) {
             showToast('Image process failed', 'error');
         }
     }
-    inputEl.value = '';  // allow re-picking same file
+    inputEl.value = '';
     renderPickupImgList(which);
 }
 
@@ -155,6 +219,27 @@ function clearPickupImageState() {
 // ==========================================
 // REASONS
 // ==========================================
+function selectReason(el, text) {
+    selectedReason = text || '';
+    document.querySelectorAll('.reason-btn').forEach(btn => btn.classList.remove('active'));
+    if (el) el.classList.add('active');
+
+    const otherInput = document.getElementById('otherReason');
+    if (otherInput) {
+        if (selectedReason && selectedReason.toLowerCase().includes('other')) {
+            otherInput.classList.remove('hidden');
+            otherInput.focus();
+        } else {
+            otherInput.classList.add('hidden');
+            otherInput.value = '';
+        }
+    }
+
+    if (navigator.vibrate) {
+        try { navigator.vibrate(12); } catch (_) {}
+    }
+}
+
 const rejectReasons = [
     { text: 'Customer wanted price only', icon: 'indian-rupee' },
     { text: 'Customer denied price drop', icon: 'trending-down' },
@@ -790,8 +875,49 @@ async function pasteOrderId() {
 // ==========================================
 // SHOW FORM
 // ==========================================
+let backNavigationReady = false;
+
+function setupBackNavigation() {
+    if (backNavigationReady) return;
+    backNavigationReady = true;
+
+    history.replaceState({ view: 'order' }, '', window.location.href);
+
+    window.addEventListener('popstate', () => {
+        const scannerModal = document.getElementById('scannerModal');
+        if (scannerModal && !scannerModal.classList.contains('hidden')) {
+            stopScanner();
+            return;
+        }
+
+        const stepForm = document.getElementById('step-form');
+        if (stepForm && !stepForm.classList.contains('hidden')) {
+            goBack();
+        }
+    });
+}
+
+function goBack() {
+    const stepOrder = document.getElementById('step-order');
+    const stepForm = document.getElementById('step-form');
+    if (stepForm && !stepForm.classList.contains('hidden')) {
+        stepForm.classList.add('hidden');
+        stepOrder.classList.remove('hidden');
+        currentStatus = '';
+        selectedReason = '';
+        hiddenImei2 = '';
+        const orderInput = document.getElementById('orderId');
+        if (orderInput) orderInput.focus();
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+        history.replaceState({ view: 'order' }, '', window.location.href);
+        return true;
+    }
+    return false;
+}
+
 function showForm(status) {
     clearPickupImageState();
+    resetSpecSelection();
     let orderId = document.getElementById('orderId').value.trim().toUpperCase();
     if (!orderId && pendingDoneOrderId) {
         orderId = pendingDoneOrderId;
@@ -809,6 +935,7 @@ function showForm(status) {
     document.getElementById('step-order').classList.add('hidden');
     document.getElementById('step-form').classList.remove('hidden');
     document.getElementById('displayOrderId').textContent = orderId;
+    history.pushState({ view: 'form', status }, '', window.location.href);
 
     const formFields = document.getElementById('formFields');
     const formTitle = document.getElementById('formTitle');
@@ -851,6 +978,30 @@ function showForm(status) {
             <div>
                 <label class="text-xs font-bold text-gray-500 mb-1.5 block">CUSTOMER NAME <span class="text-gray-400">(Optional)</span></label>
                 <input type="text" id="custName" placeholder="Enter name" class="input-field w-full p-3.5 rounded-xl outline-none">
+            </div>
+
+            <!-- 🔥 RAM / STORAGE / NETWORK — tap to select (compulsory) -->
+            <div class="pt-2 border-t border-gray-100">
+                <p class="text-xs font-bold text-gray-500 mb-3 tracking-wide">⚙️ DEVICE SPECS <span class="text-red-500 font-bold">(Required)</span></p>
+
+                <div class="spec-group">
+                    <div class="spec-label"><span class="t">RAM *</span><span class="picked empty" id="ramPick">Not selected</span></div>
+                    <div class="chip-grid">${buildSpecChips('ram', RAM_OPTIONS)}</div>
+                </div>
+
+                <div class="spec-group mt-4">
+                    <div class="spec-label"><span class="t">STORAGE (ROM) *</span><span class="picked empty" id="storagePick">Not selected</span></div>
+                    <div class="chip-grid">${buildSpecChips('storage', STORAGE_OPTIONS)}</div>
+                </div>
+
+                <div class="spec-group mt-4">
+                    <div class="spec-label"><span class="t">NETWORK *</span><span class="picked empty" id="networkPick">Not selected</span></div>
+                    <div class="chip-grid">${buildSpecChips('network', NETWORK_OPTIONS, 'net')}</div>
+                </div>
+
+                <div class="spec-summary" id="specSummary"></div>
+                <input type="hidden" id="ramStorage" value="">
+                <input type="hidden" id="networkType" value="">
             </div>
 
             <!-- ============ DOCUMENTS (Bill + Aadhaar) ============ -->
@@ -915,7 +1066,7 @@ function showForm(status) {
         `;
         reasons.forEach(r => {
             reasonsHtml += `
-                <button onclick="selectReason(this, '${r.text}')" data-reason="${r.text}" class="reason-btn w-full text-left p-3.5 rounded-xl flex items-center gap-3 hover:bg-gray-50">
+                <button type="button" onclick="selectReason(this, '${r.text}')" data-reason="${r.text}" class="reason-btn w-full text-left p-3.5 rounded-xl flex items-center gap-3 hover:bg-gray-50">
                     <div class="icon-wrap w-8 h-8 bg-gray-100 rounded-lg flex items-center justify-center flex-shrink-0">
                         <i data-lucide="${r.icon}" class="w-4 h-4 text-gray-600"></i>
                     </div>
@@ -932,26 +1083,8 @@ function showForm(status) {
         }, 100);
     }
     lucide.createIcons();
+    if (status === 'pickup') updateSpecUI();
     window.scrollTo({ top: 0, behavior: 'smooth' });
-}
-
-function goBack() {
-    document.getElementById('step-order').classList.remove('hidden');
-    document.getElementById('step-form').classList.add('hidden');
-    pendingDoneOrderId = null;
-}
-
-function selectReason(btn, reason) {
-    document.querySelectorAll('.reason-btn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    selectedReason = reason;
-    const otherInput = document.getElementById('otherReason');
-    if (reason.toLowerCase().includes('other')) {
-        otherInput.classList.remove('hidden');
-        otherInput.focus();
-    } else {
-        otherInput.classList.add('hidden');
-    }
 }
 
 // === SECTION 16: SUBMIT DATA ===
@@ -970,7 +1103,6 @@ async function submitData() {
             return;
         }
     }
-
     const orderId = document.getElementById('orderId').value.trim().toUpperCase();
     let existingData = null, exists = false;
     try {
@@ -1026,6 +1158,7 @@ async function submitData() {
         time: now.toLocaleTimeString('en-IN'),
         agent: currentUser.username
     };
+
     let whatsappMsg = '';
 
     if (currentStatus === 'pickup') {
@@ -1033,21 +1166,91 @@ async function submitData() {
         const imei = document.getElementById('imei').value.trim();
         const value = document.getElementById('value').value.trim();
         const custName = document.getElementById('custName').value.trim();
+
         if (!phoneModel || !imei || !value) {
             Swal.fire({ icon: 'error', title: 'Missing Details', text: 'Fill Model, IMEI, Value', confirmButtonColor: '#3b82f6' });
             return;
         }
+
         dbData.phoneModel = phoneModel;
         dbData.imei = imei;
         if (hiddenImei2) dbData.imei2 = hiddenImei2;
         dbData.value = parseInt(value);
         dbData.customerName = custName || 'N/A';
+
+        if (!selectedRam || !selectedStorage || !selectedNetwork) {
+            const miss = [];
+            if (!selectedRam) miss.push('RAM');
+            if (!selectedStorage) miss.push('Storage');
+            if (!selectedNetwork) miss.push('Network');
+            Swal.fire({
+                icon: 'warning',
+                title: 'Device Specs Required',
+                html: `<p class="text-sm text-gray-600">Please select <b>${miss.join(', ')}</b> before submitting.</p>`,
+                confirmButtonColor: '#3b82f6'
+            });
+            const box = document.getElementById('specSummary');
+            if (box) box.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            return;
+        }
+
+        dbData.ram = selectedRam;
+        dbData.storage = selectedStorage;
+        dbData.ramStorage = selectedRam + '/' + selectedStorage;
+        dbData.networkType = selectedNetwork;
+
         const _billNo = (document.getElementById('billNumber')?.value || '').trim();
         const _aadNo  = (document.getElementById('aadhaarNumber')?.value || '').trim();
         if (_billNo) dbData.billNumber = _billNo;
         if (_aadNo)  dbData.aadhaarNumber = _aadNo;
-        if (pickupBillImages.length)    { dbData.billImages = pickupBillImages;    dbData.billImage = pickupBillImages[0]; }
-        if (pickupAadhaarImages.length) { dbData.aadhaarImages = pickupAadhaarImages; dbData.aadhaarImage = pickupAadhaarImages[0]; }
+
+        // 🔥🔥🔥 MAIN FIX: Upload images to Firebase Storage, store only URLs in DB
+        if (pickupBillImages.length) {
+            Swal.fire({ title: 'Uploading Bill Images...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+            const billUrls = [];
+            for (let i = 0; i < pickupBillImages.length; i++) {
+                try {
+                    const blob = await (await fetch(pickupBillImages[i])).blob();
+                    const fileName = `${orderId}_bill_${i}_${Date.now()}.jpg`;
+                    const storageRef = storage.ref(`pickup_docs/${orderId}/bill/${fileName}`);
+                    const snapshot = await storageRef.put(blob, { contentType: 'image/jpeg' });
+                    const downloadURL = await snapshot.ref.getDownloadURL();
+                    billUrls.push(downloadURL);
+                } catch (e) {
+                    console.error('Bill image upload failed:', e);
+                    Swal.close();
+                    showToast('❌ Bill image upload failed', 'error');
+                    return;
+                }
+            }
+            dbData.billImages = billUrls;
+            dbData.billImage = billUrls[0];
+            Swal.close();
+        }
+
+        if (pickupAadhaarImages.length) {
+            Swal.fire({ title: 'Uploading Aadhaar Images...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+            const aadhaarUrls = [];
+            for (let i = 0; i < pickupAadhaarImages.length; i++) {
+                try {
+                    const blob = await (await fetch(pickupAadhaarImages[i])).blob();
+                    const fileName = `${orderId}_aadhaar_${i}_${Date.now()}.jpg`;
+                    const storageRef = storage.ref(`pickup_docs/${orderId}/aadhaar/${fileName}`);
+                    const snapshot = await storageRef.put(blob, { contentType: 'image/jpeg' });
+                    const downloadURL = await snapshot.ref.getDownloadURL();
+                    aadhaarUrls.push(downloadURL);
+                } catch (e) {
+                    console.error('Aadhaar image upload failed:', e);
+                    Swal.close();
+                    showToast('❌ Aadhaar image upload failed', 'error');
+                    return;
+                }
+            }
+            dbData.aadhaarImages = aadhaarUrls;
+            dbData.aadhaarImage = aadhaarUrls[0];
+            Swal.close();
+        }
+
         whatsappMsg = `Order ID: ${orderId}\nStatus: Pickup Completed`;
     } else {
         const phoneModel = document.getElementById('phoneModelRejectReschedule').value.trim();
@@ -1070,11 +1273,11 @@ async function submitData() {
         }
         dbData.reason = reason;
         if (currentStatus === 'rejected') {
-            whatsappMsg = `Order ID: ${orderId}\nStatus: Rejected\nModel: ${phoneModel}\nReason: ${reason}`;
+            whatsappMsg = `Order ID: ${orderId}\nStatus: Rejected`;
             dbData.incentive_approved = false;
             dbData.incentive_paid = false;
         } else {
-            whatsappMsg = `Order ID: ${orderId}\nModel: ${phoneModel}\nReason: ${reason}`;
+            whatsappMsg = `Order ID: ${orderId}\nStatus: Rescheduled`;
         }
     }
 
@@ -1111,6 +1314,7 @@ async function submitData() {
                 await loadPendingOrders();
             }
         }
+
         if (currentStatus === 'reschedule') {
             const pendingData = {
                 orderId,
@@ -1142,6 +1346,7 @@ async function submitData() {
             confirmButtonColor: '#25D366',
             denyButtonColor: '#3b82f6'
         });
+
         if (result.isConfirmed) {
             window.open(`https://wa.me/?text=${encodeURIComponent(whatsappMsg)}`, '_blank');
         } else if (result.isDenied) {
@@ -1158,6 +1363,7 @@ async function submitData() {
                 showToast('✅ Copied!', 'success');
             }
         }
+
         document.getElementById('orderId').value = '';
         hiddenImei2 = '';
         goBack();
@@ -1553,6 +1759,8 @@ function getISTDateTime() {
 // INIT
 // ==========================================
 document.addEventListener('DOMContentLoaded', () => {
+    setupBackNavigation();
+
     const overlay = document.createElement('div');
     overlay.id = 'blockedOverlay';
     overlay.style.cssText = 'display:none; position:fixed; inset:0; background:rgba(0,0,0,0.8); z-index:9999; align-items:center; justify-content:center; color:white; font-size:20px; font-weight:bold; flex-direction:column; padding:20px; text-align:center;';
