@@ -1087,291 +1087,273 @@ function showForm(status) {
     window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
-// === SECTION 16: SUBMIT DATA ===
+/// === SECTION 16: SUBMIT DATA ===
 // ==========================================
 // SUBMIT DATA
 // ==========================================
 async function submitData() {
-    if (!currentUser) {
-        showToast('Please login first', 'error');
-        return;
-    }
-    if (currentUser.role !== 'admin') {
-        const userSnap = await db.ref('users/' + currentUser.username + '/is_blocked').once('value');
-        if (userSnap.val() === true) {
-            showToast('🔒 You are blocked for today!', 'error');
-            return;
-        }
-    }
-    const orderId = document.getElementById('orderId').value.trim().toUpperCase();
-    let existingData = null, exists = false;
-    try {
-        const existingSnap = await db.ref('pickups/' + orderId).once('value');
-        exists = existingSnap.exists();
-        if (exists) existingData = existingSnap.val();
-    } catch (e) {
-        console.error(e);
-        showToast('Error checking order', 'error');
-        return;
-    }
-
-    if (exists && existingData.status === 'rejected' && currentStatus === 'pickup') {
-        const { value: password, isConfirmed } = await Swal.fire({
-            title: '🔐 Admin Password Required',
-            html: `
-                <p class="text-sm text-gray-600 mb-2">This order was previously <span class="text-red-600 font-bold">REJECTED</span>.</p>
-                <p class="text-sm text-gray-600 mb-2">Enter admin password to mark as <span class="text-green-600 font-bold">PICKUP COMPLETED</span>.</p>
-                <p class="text-xs text-gray-400 mt-2">Only admin knows this password.</p>
-            `,
-            input: 'password',
-            inputPlaceholder: 'Enter admin password',
-            inputAttributes: { autocapitalize: 'off', autocorrect: 'off' },
-            showCancelButton: true,
-            confirmButtonColor: '#3b82f6',
-            cancelButtonColor: '#dc2626',
-            confirmButtonText: '✅ Verify & Proceed',
-            cancelButtonText: 'Cancel',
-            allowOutsideClick: false,
-            preConfirm: (input) => { if (!input) { Swal.showValidationMessage('Enter password'); return false; } return input; }
-        });
-        if (!isConfirmed) { showToast('Cancelled', 'error'); return; }
-        if (password !== 'admin123') {
-            Swal.fire({ icon: 'error', title: 'Wrong Password', text: 'Invalid admin password.', confirmButtonColor: '#dc2626' });
-            return;
-        }
-        showToast('✅ Password verified!', 'success');
-    }
-
-    if (exists && existingData.status === 'pickup' && currentStatus === 'pickup') {
-        Swal.fire({ icon: 'error', title: 'Already Pickup Completed', text: `Order ${orderId} already marked.`, confirmButtonColor: '#3b82f6' });
-        return;
-    }
-
-    const now = new Date();
-    const istDateTime = getISTDateTime();
-    let dbData = {
-        orderId,
-        status: currentStatus,
-        timestamp: now.toISOString(),
-        timestampIST: istDateTime,
-        date: now.toLocaleDateString('en-IN'),
-        time: now.toLocaleTimeString('en-IN'),
-        agent: currentUser.username
-    };
-
-    let whatsappMsg = '';
-
-    if (currentStatus === 'pickup') {
-        const phoneModel = document.getElementById('phoneModel').value.trim();
-        const imei = document.getElementById('imei').value.trim();
-        const value = document.getElementById('value').value.trim();
-        const custName = document.getElementById('custName').value.trim();
-
-        if (!phoneModel || !imei || !value) {
-            Swal.fire({ icon: 'error', title: 'Missing Details', text: 'Fill Model, IMEI, Value', confirmButtonColor: '#3b82f6' });
-            return;
-        }
-
-        dbData.phoneModel = phoneModel;
-        dbData.imei = imei;
-        if (hiddenImei2) dbData.imei2 = hiddenImei2;
-        dbData.value = parseInt(value);
-        dbData.customerName = custName || 'N/A';
-
-        if (!selectedRam || !selectedStorage || !selectedNetwork) {
-            const miss = [];
-            if (!selectedRam) miss.push('RAM');
-            if (!selectedStorage) miss.push('Storage');
-            if (!selectedNetwork) miss.push('Network');
-            Swal.fire({
-                icon: 'warning',
-                title: 'Device Specs Required',
-                html: `<p class="text-sm text-gray-600">Please select <b>${miss.join(', ')}</b> before submitting.</p>`,
-                confirmButtonColor: '#3b82f6'
-            });
-            const box = document.getElementById('specSummary');
-            if (box) box.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            return;
-        }
-
-        dbData.ram = selectedRam;
-        dbData.storage = selectedStorage;
-        dbData.ramStorage = selectedRam + '/' + selectedStorage;
-        dbData.networkType = selectedNetwork;
-
-        const _billNo = (document.getElementById('billNumber')?.value || '').trim();
-        const _aadNo  = (document.getElementById('aadhaarNumber')?.value || '').trim();
-        if (_billNo) dbData.billNumber = _billNo;
-        if (_aadNo)  dbData.aadhaarNumber = _aadNo;
-
-        // 🔥🔥🔥 MAIN FIX: Upload images to Firebase Storage, store only URLs in DB
-        if (pickupBillImages.length) {
-            Swal.fire({ title: 'Uploading Bill Images...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
-            const billUrls = [];
-            for (let i = 0; i < pickupBillImages.length; i++) {
-                try {
-                    const blob = await (await fetch(pickupBillImages[i])).blob();
-                    const fileName = `${orderId}_bill_${i}_${Date.now()}.jpg`;
-                    const storageRef = storage.ref(`pickup_docs/${orderId}/bill/${fileName}`);
-                    const snapshot = await storageRef.put(blob, { contentType: 'image/jpeg' });
-                    const downloadURL = await snapshot.ref.getDownloadURL();
-                    billUrls.push(downloadURL);
-                } catch (e) {
-                    console.error('Bill image upload failed:', e);
-                    Swal.close();
-                    showToast('❌ Bill image upload failed', 'error');
-                    return;
-                }
-            }
-            dbData.billImages = billUrls;
-            dbData.billImage = billUrls[0];
-            Swal.close();
-        }
-
-        if (pickupAadhaarImages.length) {
-            Swal.fire({ title: 'Uploading Aadhaar Images...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
-            const aadhaarUrls = [];
-            for (let i = 0; i < pickupAadhaarImages.length; i++) {
-                try {
-                    const blob = await (await fetch(pickupAadhaarImages[i])).blob();
-                    const fileName = `${orderId}_aadhaar_${i}_${Date.now()}.jpg`;
-                    const storageRef = storage.ref(`pickup_docs/${orderId}/aadhaar/${fileName}`);
-                    const snapshot = await storageRef.put(blob, { contentType: 'image/jpeg' });
-                    const downloadURL = await snapshot.ref.getDownloadURL();
-                    aadhaarUrls.push(downloadURL);
-                } catch (e) {
-                    console.error('Aadhaar image upload failed:', e);
-                    Swal.close();
-                    showToast('❌ Aadhaar image upload failed', 'error');
-                    return;
-                }
-            }
-            dbData.aadhaarImages = aadhaarUrls;
-            dbData.aadhaarImage = aadhaarUrls[0];
-            Swal.close();
-        }
-
-        whatsappMsg = `Order ID: ${orderId}\nStatus: Pickup Completed`;
-    } else {
-        const phoneModel = document.getElementById('phoneModelRejectReschedule').value.trim();
-        if (!phoneModel) {
-            Swal.fire({ icon: 'error', title: 'Missing Model', text: 'Enter phone model', confirmButtonColor: '#3b82f6' });
-            return;
-        }
-        dbData.phoneModel = phoneModel;
-        let reason = selectedReason;
-        if (reason.toLowerCase().includes('other')) {
-            reason = document.getElementById('otherReason').value.trim();
-            if (!reason) {
-                Swal.fire({ icon: 'warning', title: 'Reason Required', text: 'Type the reason', confirmButtonColor: '#3b82f6' });
-                return;
-            }
-        }
-        if (!reason) {
-            Swal.fire({ icon: 'warning', title: 'Select Reason', text: 'Choose a reason', confirmButtonColor: '#3b82f6' });
-            return;
-        }
-        dbData.reason = reason;
-        if (currentStatus === 'rejected') {
-            whatsappMsg = `Order ID: ${orderId}\nStatus: Rejected`;
-            dbData.incentive_approved = false;
-            dbData.incentive_paid = false;
-        } else {
-            whatsappMsg = `Order ID: ${orderId}\nStatus: Rescheduled`;
-        }
-    }
-
-    if (currentStatus === 'reschedule') {
-        try {
-            const pendingSnap = await db.ref('pending/' + orderId).once('value');
-            if (pendingSnap.exists()) {
-                const existingReason = pendingSnap.val().reason || '';
-                if (existingReason !== dbData.reason) {
-                    const r = await Swal.fire({
-                        title: 'Change Reason?',
-                        text: `Existing: "${existingReason}". Update to "${dbData.reason}"?`,
-                        icon: 'question',
-                        showCancelButton: true,
-                        confirmButtonColor: '#f59e0b',
-                        confirmButtonText: 'Update',
-                        cancelButtonText: 'Cancel'
-                    });
-                    if (!r.isConfirmed) { showToast('Cancelled', 'error'); return; }
-                }
-            }
-        } catch (e) { console.error(e); }
-    }
-
-    Swal.fire({ title: 'Saving...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
-    try {
-        if (exists) await db.ref('pickups/' + orderId).update(dbData);
-        else await db.ref('pickups/' + orderId).set(dbData);
-
-        if (currentStatus === 'pickup' || currentStatus === 'rejected') {
-            const pendingSnap = await db.ref('pending/' + orderId).once('value');
-            if (pendingSnap.exists()) {
-                await db.ref('pending/' + orderId).remove();
-                await loadPendingOrders();
-            }
-        }
-
-        if (currentStatus === 'reschedule') {
-            const pendingData = {
-                orderId,
-                phoneModel: dbData.phoneModel,
-                reason: dbData.reason || selectedReason,
-                status: 'reschedule',
-                timestamp: now.toISOString(),
-                timestampIST: istDateTime,
-                agent: currentUser.username
-            };
-            await db.ref('pending/' + orderId).set(pendingData);
-            await loadPendingOrders();
-        }
-
-        const result = await Swal.fire({
-            icon: 'success',
-            title: '✅ Saved!',
-            html: `
-                <p class="text-sm text-gray-600 mb-2">📊 Firebase me time save ho gaya:</p>
-                <div class="text-left bg-blue-50 p-2 rounded-lg text-xs font-mono mb-3">${istDateTime}</div>
-                <p class="text-sm text-gray-600 mb-2">📱 WhatsApp message (no time):</p>
-                <div class="text-left bg-gray-50 p-3 rounded-lg text-xs font-mono whitespace-pre-wrap">${whatsappMsg}</div>
-            `,
-            showCancelButton: true,
-            showDenyButton: true,
-            confirmButtonText: '📤 Open WhatsApp',
-            denyButtonText: '📋 Copy Message',
-            cancelButtonText: 'Close',
-            confirmButtonColor: '#25D366',
-            denyButtonColor: '#3b82f6'
-        });
-
-        if (result.isConfirmed) {
-            window.open(`https://wa.me/?text=${encodeURIComponent(whatsappMsg)}`, '_blank');
-        } else if (result.isDenied) {
-            try {
-                await navigator.clipboard.writeText(whatsappMsg);
-                showToast('✅ Copied!', 'success');
-            } catch (e) {
-                const ta = document.createElement('textarea');
-                ta.value = whatsappMsg;
-                document.body.appendChild(ta);
-                ta.select();
-                document.execCommand('copy');
-                document.body.removeChild(ta);
-                showToast('✅ Copied!', 'success');
-            }
-        }
-
-        document.getElementById('orderId').value = '';
-        hiddenImei2 = '';
-        goBack();
-        loadTodayStats();
-        loadPendingOrders();
-    } catch (error) {
-        Swal.fire({ icon: 'error', title: 'Error', text: error.message });
-    }
+if (!currentUser) {
+showToast('Please login first', 'error');
+return;
+}
+if (currentUser.role !== 'admin') {
+const userSnap = await db.ref('users/' + currentUser.username + '/is_blocked').once('value');
+if (userSnap.val() === true) {
+showToast('🔒 You are blocked for today!', 'error');
+return;
+}
+}
+const orderId = document.getElementById('orderId').value.trim().toUpperCase();
+let existingData = null, exists = false;
+try {
+const existingSnap = await db.ref('pickups/' + orderId).once('value');
+exists = existingSnap.exists();
+if (exists) existingData = existingSnap.val();
+} catch (e) {
+console.error(e);
+showToast('Error checking order', 'error');
+return;
+}
+if (exists && existingData.status === 'rejected' && currentStatus === 'pickup') {
+     const { value: password, isConfirmed } = await Swal.fire({
+         title: '🔐 Admin Password Required',
+         html: `
+             <p class="text-sm text-gray-600 mb-2">This order was previously <span class="text-red-600 font-bold">REJECTED</span>.</p>
+             <p class="text-sm text-gray-600 mb-2">Enter admin password to mark as <span class="text-green-600 font-bold">PICKUP COMPLETED</span>.</p>
+             <p class="text-xs text-gray-400 mt-2">Only admin knows this password.</p>
+         `,
+         input: 'password',
+         inputPlaceholder: 'Enter admin password',
+         inputAttributes: { autocapitalize: 'off', autocorrect: 'off' },
+         showCancelButton: true,
+         confirmButtonColor: '#3b82f6',
+         cancelButtonColor: '#dc2626',
+         confirmButtonText: '✅ Verify & Proceed',
+         cancelButtonText: 'Cancel',
+         allowOutsideClick: false,
+         preConfirm: (input) => { if (!input) { Swal.showValidationMessage('Enter password'); return false; } return input; }
+     });
+     if (!isConfirmed) { showToast('Cancelled', 'error'); return; }
+     if (password !== 'admin123') {
+         Swal.fire({ icon: 'error', title: 'Wrong Password', text: 'Invalid admin password.', confirmButtonColor: '#dc2626' });
+         return;
+     }
+     showToast('✅ Password verified!', 'success');
+ }
+ if (exists && existingData.status === 'pickup' && currentStatus === 'pickup') {
+     Swal.fire({ icon: 'error', title: 'Already Pickup Completed', text: `Order ${orderId} already marked.`, confirmButtonColor: '#3b82f6' });
+     return;
+ }
+ const now = new Date();
+ const istDateTime = getISTDateTime();
+ let dbData = {
+     orderId,
+     status: currentStatus,
+     timestamp: now.toISOString(),
+     timestampIST: istDateTime,
+     date: now.toLocaleDateString('en-IN'),
+     time: now.toLocaleTimeString('en-IN'),
+     agent: currentUser.username
+ };
+ let whatsappMsg = '';
+ if (currentStatus === 'pickup') {
+     const phoneModel = document.getElementById('phoneModel').value.trim();
+     const imei = document.getElementById('imei').value.trim();
+     const value = document.getElementById('value').value.trim();
+     const custName = document.getElementById('custName').value.trim();
+     if (!phoneModel || !imei || !value) {
+         Swal.fire({ icon: 'error', title: 'Missing Details', text: 'Fill Model, IMEI, Value', confirmButtonColor: '#3b82f6' });
+         return;
+     }
+     dbData.phoneModel = phoneModel;
+     dbData.imei = imei;
+     if (hiddenImei2) dbData.imei2 = hiddenImei2;
+     dbData.value = parseInt(value);
+     dbData.customerName = custName || 'N/A';
+     if (!selectedRam || !selectedStorage || !selectedNetwork) {
+         const miss = [];
+         if (!selectedRam) miss.push('RAM');
+         if (!selectedStorage) miss.push('Storage');
+         if (!selectedNetwork) miss.push('Network');
+         Swal.fire({
+             icon: 'warning',
+             title: 'Device Specs Required',
+             html: `<p class="text-sm text-gray-600">Please select <b>${miss.join(', ')}</b> before submitting.</p>`,
+             confirmButtonColor: '#3b82f6'
+         });
+         const box = document.getElementById('specSummary');
+         if (box) box.scrollIntoView({ behavior: 'smooth', block: 'center' });
+         return;
+     }
+     dbData.ram = selectedRam;
+     dbData.storage = selectedStorage;
+     dbData.ramStorage = selectedRam + '/' + selectedStorage;
+     dbData.networkType = selectedNetwork;
+     const _billNo = (document.getElementById('billNumber')?.value || '').trim();
+     const _aadNo  = (document.getElementById('aadhaarNumber')?.value || '').trim();
+     if (_billNo) dbData.billNumber = _billNo;
+     if (_aadNo)  dbData.aadhaarNumber = _aadNo;
+     // 🔥🔥🔥 MAIN FIX: Upload images to Firebase Storage, store only URLs in DB
+     if (pickupBillImages.length) {
+         Swal.fire({ title: 'Uploading Bill Images...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+         const billUrls = [];
+         for (let i = 0; i < pickupBillImages.length; i++) {
+             try {
+                 const blob = await (await fetch(pickupBillImages[i])).blob();
+                 const fileName = `${orderId}_bill_${i}_${Date.now()}.jpg`;
+                 const storageRef = storage.ref(`pickup_docs/${orderId}/bill/${fileName}`);
+                 const snapshot = await storageRef.put(blob, { contentType: 'image/jpeg' });
+                 const downloadURL = await snapshot.ref.getDownloadURL();
+                 billUrls.push(downloadURL);
+             } catch (e) {
+                 console.error('Bill image upload failed:', e);
+                 Swal.close();
+                 showToast('❌ Bill image upload failed', 'error');
+                 return;
+             }
+         }
+         dbData.billImages = billUrls;
+         dbData.billImage = billUrls[0];
+         Swal.close();
+     }
+     if (pickupAadhaarImages.length) {
+         Swal.fire({ title: 'Uploading Aadhaar Images...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+         const aadhaarUrls = [];
+         for (let i = 0; i < pickupAadhaarImages.length; i++) {
+             try {
+                 const blob = await (await fetch(pickupAadhaarImages[i])).blob();
+                 const fileName = `${orderId}_aadhaar_${i}_${Date.now()}.jpg`;
+                 const storageRef = storage.ref(`pickup_docs/${orderId}/aadhaar/${fileName}`);
+                 const snapshot = await storageRef.put(blob, { contentType: 'image/jpeg' });
+                 const downloadURL = await snapshot.ref.getDownloadURL();
+                 aadhaarUrls.push(downloadURL);
+             } catch (e) {
+                 console.error('Aadhaar image upload failed:', e);
+                 Swal.close();
+                 showToast('❌ Aadhaar image upload failed', 'error');
+                 return;
+             }
+         }
+         dbData.aadhaarImages = aadhaarUrls;
+         dbData.aadhaarImage = aadhaarUrls[0];
+         Swal.close();
+     }
+     whatsappMsg = `Order ID: ${orderId}\nStatus: Pickup Completed`;
+ } else {
+     const phoneModel = document.getElementById('phoneModelRejectReschedule').value.trim();
+     if (!phoneModel) {
+         Swal.fire({ icon: 'error', title: 'Missing Model', text: 'Enter phone model', confirmButtonColor: '#3b82f6' });
+         return;
+     }
+     dbData.phoneModel = phoneModel;
+     let reason = selectedReason;
+     if (reason.toLowerCase().includes('other')) {
+         reason = document.getElementById('otherReason').value.trim();
+         if (!reason) {
+             Swal.fire({ icon: 'warning', title: 'Reason Required', text: 'Type the reason', confirmButtonColor: '#3b82f6' });
+             return;
+         }
+     }
+     if (!reason) {
+         Swal.fire({ icon: 'warning', title: 'Select Reason', text: 'Choose a reason', confirmButtonColor: '#3b82f6' });
+         return;
+     }
+     dbData.reason = reason;
+     
+     // 🔥 UPDATED: WhatsApp Message Format for Reject & Reschedule
+     if (currentStatus === 'rejected') {
+         whatsappMsg = `Order ID: ${orderId}\nModel: ${dbData.phoneModel}\nReason: ${dbData.reason}\nStatus: Rejected`;
+         dbData.incentive_approved = false;
+         dbData.incentive_paid = false;
+     } else {
+         whatsappMsg = `Order ID: ${orderId}\nModel: ${dbData.phoneModel}\nReason: ${dbData.reason}\nStatus: Rescheduled`;
+     }
+ }
+ if (currentStatus === 'reschedule') {
+     try {
+         const pendingSnap = await db.ref('pending/' + orderId).once('value');
+         if (pendingSnap.exists()) {
+             const existingReason = pendingSnap.val().reason || '';
+             if (existingReason !== dbData.reason) {
+                 const r = await Swal.fire({
+                     title: 'Change Reason?',
+                     text: `Existing: "${existingReason}". Update to "${dbData.reason}"?`,
+                     icon: 'question',
+                     showCancelButton: true,
+                     confirmButtonColor: '#f59e0b',
+                     confirmButtonText: 'Update',
+                     cancelButtonText: 'Cancel'
+                 });
+                 if (!r.isConfirmed) { showToast('Cancelled', 'error'); return; }
+             }
+         }
+     } catch (e) { console.error(e); }
+ }
+ Swal.fire({ title: 'Saving...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+ try {
+     if (exists) await db.ref('pickups/' + orderId).update(dbData);
+     else await db.ref('pickups/' + orderId).set(dbData);
+     if (currentStatus === 'pickup' || currentStatus === 'rejected') {
+         const pendingSnap = await db.ref('pending/' + orderId).once('value');
+         if (pendingSnap.exists()) {
+             await db.ref('pending/' + orderId).remove();
+             await loadPendingOrders();
+         }
+     }
+     if (currentStatus === 'reschedule') {
+         const pendingData = {
+             orderId,
+             phoneModel: dbData.phoneModel,
+             reason: dbData.reason || selectedReason,
+             status: 'reschedule',
+             timestamp: now.toISOString(),
+             timestampIST: istDateTime,
+             agent: currentUser.username
+         };
+         await db.ref('pending/' + orderId).set(pendingData);
+         await loadPendingOrders();
+     }
+     const result = await Swal.fire({
+         icon: 'success',
+         title: '✅ Saved!',
+         html: `
+             <p class="text-sm text-gray-600 mb-2">📊 Firebase me time save ho gaya:</p>
+             <div class="text-left bg-blue-50 p-2 rounded-lg text-xs font-mono mb-3">${istDateTime}</div>
+             <p class="text-sm text-gray-600 mb-2">📱 WhatsApp message (no time):</p>
+             <div class="text-left bg-gray-50 p-3 rounded-lg text-xs font-mono whitespace-pre-wrap">${whatsappMsg}</div>
+         `,
+         showCancelButton: true,
+         showDenyButton: true,
+         confirmButtonText: '📤 Open WhatsApp',
+         denyButtonText: '📋 Copy Message',
+         cancelButtonText: 'Close',
+         confirmButtonColor: '#25D366',
+         denyButtonColor: '#3b82f6'
+     });
+     if (result.isConfirmed) {
+         window.open(`https://wa.me/?text=${encodeURIComponent(whatsappMsg)}`, '_blank');
+     } else if (result.isDenied) {
+         try {
+             await navigator.clipboard.writeText(whatsappMsg);
+             showToast('✅ Copied!', 'success');
+         } catch (e) {
+             const ta = document.createElement('textarea');
+             ta.value = whatsappMsg;
+             document.body.appendChild(ta);
+             ta.select();
+             document.execCommand('copy');
+             document.body.removeChild(ta);
+             showToast('✅ Copied!', 'success');
+         }
+     }
+     document.getElementById('orderId').value = '';
+     hiddenImei2 = '';
+     goBack();
+     loadTodayStats();
+     loadPendingOrders();
+ } catch (error) {
+     Swal.fire({ icon: 'error', title: 'Error', text: error.message });
+ }
 }
 
 // === SECTION 17: SCANNER FUNCTIONS (Barcode + OCR) ===
