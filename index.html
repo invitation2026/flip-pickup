@@ -4,21 +4,17 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <meta name="theme-color" content="#1e3a8a" />
+    <meta name="theme-color" content="#2874F0" />
     <title>Flipkart Pickup Agent</title>
 
     <!-- === SECTION 2: EXTERNAL SCRIPTS & LIBRARIES (CDN) === -->
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
 <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
-<script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-storage.js"></script>   <!-- 🔥 NEW -->
+<script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-storage.js"></script>
 
-<!-- ZXing for barcode -->
 <script src="https://unpkg.com/@zxing/library@0.21.0/umd/index.min.js"></script>
-
-<!-- Tesseract.js for OCR -->
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
-
 <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
 <script src="https://unpkg.com/lucide@latest"></script>
 
@@ -505,6 +501,56 @@
             display: none;
         }
 
+        /* ========================================================
+           🔥 NEW: FLIPKART LOGIN BRAND (Agent Panel)
+           ======================================================== */
+        .flipkart-login-brand {
+            text-align: center;
+            margin-bottom: 22px;
+            animation: fadeIn 0.45s ease;
+        }
+        .flipkart-login-logo {
+            width: 58px;
+            height: 58px;
+            margin: 0 auto 10px;
+            border-radius: 18px;
+            background: linear-gradient(135deg, #2874F0 0%, #1e5fd0 55%, #0c3fa0 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow:
+                0 12px 30px rgba(40,116,240,0.35),
+                inset 0 1px 0 rgba(255,255,255,0.3);
+        }
+        .flipkart-login-logo svg {
+            width: 34px;
+            height: 34px;
+            filter: drop-shadow(0 3px 8px rgba(0,0,0,0.18));
+        }
+        .flipkart-login-wordmark {
+            font-size: 28px;
+            font-weight: 900;
+            letter-spacing: -0.9px;
+            line-height: 1;
+            display: inline-block;
+            background: linear-gradient(135deg, #0b1a3a 0%, #2874F0 60%, #1e5fd0 100%);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+        }
+        .flipkart-login-wordmark .dot {
+            -webkit-text-fill-color: #FFE11B;
+            color: #FFE11B;
+        }
+        .flipkart-login-tagline {
+            font-size: 10px;
+            font-weight: 800;
+            letter-spacing: 3px;
+            text-transform: uppercase;
+            color: #94a3b8;
+            margin-top: 8px;
+        }
+
         /* User badge */
         .user-badge {
             display: flex;
@@ -540,6 +586,8 @@
             .auth-box { padding: 24px 18px; }
             .auth-box h2 { font-size: 20px; }
             .user-badge { font-size: 12px; gap: 4px; padding: 3px 8px; }
+            .flipkart-login-wordmark { font-size: 26px; }
+            .flipkart-login-logo { width: 54px; height: 54px; }
         }
 
         /* ----- NEW ATTENDANCE STYLES ----- */
@@ -550,22 +598,10 @@
             font-size: 14px;
             display: inline-block;
         }
-        .attendance-status.present {
-            background: #bbf7d0;
-            color: #065f46;
-        }
-        .attendance-status.absent {
-            background: #fecaca;
-            color: #991b1b;
-        }
-        .attendance-status.blocked {
-            background: #fef3c7;
-            color: #92400e;
-        }
-        .attendance-status.not-marked {
-            background: #e2e8f0;
-            color: #64748b;
-        }
+        .attendance-status.present { background: #bbf7d0; color: #065f46; }
+        .attendance-status.absent { background: #fecaca; color: #991b1b; }
+        .attendance-status.blocked { background: #fef3c7; color: #92400e; }
+        .attendance-status.not-marked { background: #e2e8f0; color: #64748b; }
         .otp-input-box {
             display: flex;
             gap: 10px;
@@ -621,7 +657,7 @@
         .attendance-history .day-item .status.blocked { color: #d97706; }
         .attendance-history .day-item .status.not-marked { color: #94a3b8; }
 
-        /* ===== 🔥 SPEC SELECTOR (RAM / STORAGE / NETWORK) ===== */
+        /* ===== SPEC SELECTOR ===== */
         .spec-group { margin-bottom: 4px; }
         .spec-label { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }
         .spec-label .t { font-size:11px; font-weight:800; color:#6b7280; letter-spacing:.6px; }
@@ -629,6 +665,7 @@
         .spec-label .picked.empty { color:#dc2626; }
         .chip-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; }
         .chip-grid.cols-3 { grid-template-columns:repeat(3,minmax(0,1fr)); }
+        .chip-grid.cols-5 { grid-template-columns:repeat(5,minmax(0,1fr)); }
         .spec-chip {
             padding:13px 4px; border-radius:14px; border:2px solid #e5e7eb; background:#fff;
             font-size:15px; font-weight:800; color:#374151; text-align:center; line-height:1.1;
@@ -651,23 +688,553 @@
         .spec-summary.ok { border-style:solid; border-color:#22c55e; background:#f0fdf4; }
         .spec-summary.ok .body { color:#15803d; }
         .spec-missing { font-size:12px; font-weight:700; color:#dc2626; margin-top:6px; }
+
+        /* =========================================================
+           FLIPKART OMS SPLASH — Flipkart + Om Sai Ram Comm.
+           ========================================================= */
+        .splash-screen {
+            position: fixed;
+            inset: 0;
+            z-index: 9997;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #061022;
+            overflow: hidden;
+            opacity: 1;
+            transition: opacity 0.75s cubic-bezier(0.4, 0, 0.2, 1),
+                        transform 0.75s cubic-bezier(0.4, 0, 0.2, 1),
+                        visibility 0.75s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .splash-screen.is-hidden { display: none; }
+        .splash-screen.fade-out {
+            opacity: 0;
+            visibility: hidden;
+            transform: scale(1.05);
+            pointer-events: none;
+        }
+
+        .splash-bg {
+            position: absolute;
+            inset: 0;
+            background:
+                radial-gradient(circle at 20% 15%, rgba(40,116,240,0.55), transparent 55%),
+                radial-gradient(circle at 85% 85%, rgba(255,225,27,0.30), transparent 55%),
+                radial-gradient(circle at 50% 50%, rgba(40,116,240,0.28), transparent 70%),
+                linear-gradient(135deg, #061022 0%, #0b2149 45%, #10306b 100%);
+        }
+        .splash-bg::after {
+            content: '';
+            position: absolute;
+            inset: -50%;
+            background: linear-gradient(115deg, transparent 40%, rgba(255,255,255,0.07) 50%, transparent 60%);
+            animation: shimmerSweep 3.2s ease-in-out infinite;
+        }
+        @keyframes shimmerSweep {
+            0%   { transform: translateX(-40%) rotate(0deg); }
+            100% { transform: translateX(40%)  rotate(0deg); }
+        }
+
+        .splash-orb {
+            position: absolute;
+            border-radius: 50%;
+            filter: blur(70px);
+            opacity: 0.55;
+            pointer-events: none;
+        }
+        .splash-orb-1 { width: 340px; height: 340px; background: #2874F0; top: -120px; left: -120px; animation: orbFloat 7s ease-in-out infinite; }
+        .splash-orb-2 { width: 280px; height: 280px; background: #FFE11B; bottom: -100px; right: -100px; opacity: 0.35; animation: orbFloat 8s ease-in-out infinite reverse; }
+        .splash-orb-3 { width: 200px; height: 200px; background: #22d3ee; top: 55%; left: -80px; opacity: 0.35; animation: orbFloat 9s ease-in-out infinite; }
+        @keyframes orbFloat {
+            0%, 100% { transform: translate(0, 0); }
+            50%      { transform: translate(26px, 30px); }
+        }
+
+        .splash-content {
+            position: relative;
+            z-index: 2;
+            padding: 24px;
+            text-align: center;
+            max-width: 420px;
+            width: 100%;
+            animation: splashEnter 0.8s cubic-bezier(0.16, 1, 0.3, 1) both;
+        }
+        @keyframes splashEnter {
+            from { opacity: 0; transform: translateY(26px) scale(0.95); }
+            to   { opacity: 1; transform: translateY(0) scale(1); }
+        }
+
+        .splash-logo {
+            width: 118px;
+            height: 118px;
+            margin: 0 auto 22px;
+            border-radius: 34px;
+            background: linear-gradient(135deg, #2874F0 0%, #1e5fd0 55%, #0c3fa0 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            box-shadow:
+                0 24px 60px rgba(40,116,240,0.55),
+                0 0 0 1px rgba(255,255,255,0.14) inset,
+                0 -20px 40px rgba(255,225,27,0.18) inset;
+            animation: logoPop 1s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+        }
+        .splash-logo::before {
+            content: '';
+            position: absolute;
+            inset: -4px;
+            border-radius: 38px;
+            background: linear-gradient(135deg, #2874F0, #FFE11B, #22d3ee, #2874F0);
+            background-size: 300% 300%;
+            z-index: -1;
+            filter: blur(14px);
+            opacity: 0.75;
+            animation: gradientSpin 4s linear infinite;
+        }
+        @keyframes gradientSpin {
+            0%   { background-position: 0% 50%; }
+            100% { background-position: 300% 50%; }
+        }
+        .splash-logo svg {
+            width: 74px;
+            height: 74px;
+            filter: drop-shadow(0 6px 16px rgba(0, 0, 0, 0.28));
+        }
+        @keyframes logoPop {
+            0%   { opacity: 0; transform: scale(0.55) rotate(-6deg); }
+            60%  { opacity: 1; transform: scale(1.06) rotate(2deg); }
+            100% { opacity: 1; transform: scale(1) rotate(0); }
+        }
+
+        .splash-brand {
+            font-size: 44px;
+            line-height: 1;
+            font-weight: 900;
+            letter-spacing: -1.2px;
+            margin: 0;
+            background: linear-gradient(180deg, #ffffff 0%, #dbeafe 55%, #93c5fd 100%);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+            text-shadow: 0 8px 30px rgba(40,116,240,0.45);
+            animation: splashEnter 0.85s cubic-bezier(0.16, 1, 0.3, 1) 0.15s both;
+        }
+        .splash-brand .dot {
+            color: #FFE11B;
+            -webkit-text-fill-color: #FFE11B;
+        }
+
+        .splash-divider {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            margin: 16px auto 14px;
+            width: 70%;
+            animation: splashEnter 0.85s cubic-bezier(0.16, 1, 0.3, 1) 0.28s both;
+        }
+        .splash-divider .line {
+            flex: 1;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.45), transparent);
+        }
+        .splash-divider .diamond {
+            width: 7px;
+            height: 7px;
+            background: #FFE11B;
+            transform: rotate(45deg);
+            box-shadow: 0 0 14px rgba(255,225,27,0.85);
+            border-radius: 1.5px;
+        }
+
+        .splash-partner {
+            font-size: 15px;
+            font-weight: 800;
+            letter-spacing: 3.4px;
+            text-transform: uppercase;
+            color: #e0e7ff;
+            margin: 0;
+            text-shadow: 0 4px 18px rgba(0,0,0,0.35);
+            animation: splashEnter 0.85s cubic-bezier(0.16, 1, 0.3, 1) 0.4s both;
+        }
+        .splash-partner-sub {
+            display: block;
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 5px;
+            text-transform: uppercase;
+            color: rgba(255,255,255,0.55);
+            margin-top: 8px;
+            animation: splashEnter 0.85s cubic-bezier(0.16, 1, 0.3, 1) 0.5s both;
+        }
+
+        .splash-loader {
+            display: flex;
+            justify-content: center;
+            gap: 9px;
+            margin-top: 38px;
+            animation: splashEnter 0.85s cubic-bezier(0.16, 1, 0.3, 1) 0.6s both;
+        }
+        .splash-loader span {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: linear-gradient(180deg, #ffffff, #93c5fd);
+            box-shadow: 0 0 10px rgba(147,197,253,0.7);
+            animation: dotBounce 1.4s ease-in-out infinite;
+        }
+        .splash-loader span:nth-child(2) { animation-delay: 0.15s; }
+        .splash-loader span:nth-child(3) { animation-delay: 0.3s; }
+        @keyframes dotBounce {
+            0%, 60%, 100% { transform: translateY(0);    opacity: 0.45; }
+            30%           { transform: translateY(-10px); opacity: 1; }
+        }
+
+        .splash-footer {
+            position: absolute;
+            bottom: 22px;
+            left: 0;
+            right: 0;
+            text-align: center;
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 3px;
+            color: rgba(255,255,255,0.35);
+            text-transform: uppercase;
+            animation: splashEnter 0.85s cubic-bezier(0.16, 1, 0.3, 1) 0.7s both;
+        }
+
+        /* =========================================================
+           PICKUP COMPLETED SUCCESS ANIMATION (Flipkart-styled)
+           ========================================================= */
+        .pickup-success-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 9998;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 18px;
+            background: radial-gradient(circle at 50% 40%, rgba(40,116,240,0.35), rgba(6,16,34,0.88) 70%);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.35s ease, visibility 0.35s ease;
+        }
+        .pickup-success-overlay.show {
+            opacity: 1;
+            visibility: visible;
+        }
+        .pickup-success-card {
+            position: relative;
+            width: 100%;
+            max-width: 420px;
+            max-height: 92vh;
+            overflow-y: auto;
+            background: #ffffff;
+            border-radius: 26px;
+            padding: 26px 22px 20px;
+            text-align: center;
+            box-shadow: 0 30px 80px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.04) inset;
+            transform: translateY(30px) scale(0.94);
+            opacity: 0;
+            transition: transform 0.45s cubic-bezier(0.16,1,0.3,1), opacity 0.4s ease;
+        }
+        .pickup-success-overlay.show .pickup-success-card {
+            transform: translateY(0) scale(1);
+            opacity: 1;
+        }
+
+        .pickup-success-check {
+            width: 92px;
+            height: 92px;
+            margin: 0 auto 6px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 14px 34px rgba(16,185,129,0.45);
+            animation: checkPop 0.7s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+        }
+        @keyframes checkPop {
+            0%   { transform: scale(0.3) rotate(-12deg); opacity: 0; }
+            60%  { transform: scale(1.12) rotate(3deg);  opacity: 1; }
+            100% { transform: scale(1)    rotate(0);     opacity: 1; }
+        }
+        .pickup-success-check svg { width: 54px; height: 54px; }
+        .pickup-success-check svg path {
+            fill: none;
+            stroke: #ffffff;
+            stroke-width: 6;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+            stroke-dasharray: 48;
+            stroke-dashoffset: 48;
+            animation: drawTick 0.55s cubic-bezier(0.6,0.2,0.3,1) 0.35s forwards;
+        }
+        @keyframes drawTick {
+            to { stroke-dashoffset: 0; }
+        }
+
+        .pickup-success-title {
+            font-size: 22px;
+            font-weight: 900;
+            color: #0f172a;
+            letter-spacing: -0.3px;
+            margin: 8px 0 2px;
+            animation: fadeIn 0.4s ease 0.25s both;
+        }
+        .pickup-success-sub {
+            font-size: 13px;
+            color: #64748b;
+            margin-bottom: 16px;
+            animation: fadeIn 0.4s ease 0.35s both;
+        }
+
+        .pickup-success-orderid {
+            background: linear-gradient(135deg, #eef4ff, #e0eaff);
+            border: 1px solid #c7d9ff;
+            border-radius: 14px;
+            padding: 10px 12px;
+            margin-bottom: 14px;
+            animation: fadeIn 0.45s ease 0.45s both;
+        }
+        .pickup-success-orderid .lbl {
+            display: block;
+            font-size: 10px;
+            font-weight: 800;
+            letter-spacing: 1.2px;
+            color: #2874F0;
+            margin-bottom: 2px;
+        }
+        .pickup-success-orderid .val {
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 16px;
+            font-weight: 800;
+            color: #0b1a3a;
+            word-break: break-all;
+        }
+
+        .pickup-success-details {
+            text-align: left;
+            max-height: 34vh;
+            overflow-y: auto;
+            margin-bottom: 14px;
+            padding-right: 4px;
+        }
+        .pickup-success-details::-webkit-scrollbar { display: none; }
+        .pickup-success-details .row {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 10px;
+            padding: 8px 10px;
+            border-radius: 10px;
+            font-size: 13px;
+            opacity: 0;
+            transform: translateY(8px);
+            animation: rowIn 0.35s ease forwards;
+        }
+        .pickup-success-details .row:nth-child(odd) { background: #f8fafc; }
+        @keyframes rowIn {
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .pickup-success-details .row .k {
+            color: #64748b;
+            font-weight: 600;
+            flex: 0 0 42%;
+        }
+        .pickup-success-details .row .v {
+            color: #0f172a;
+            font-weight: 700;
+            text-align: right;
+            flex: 1;
+            word-break: break-word;
+        }
+
+        .pickup-success-btn {
+            width: 100%;
+            padding: 14px;
+            border: none;
+            border-radius: 14px;
+            background: linear-gradient(135deg, #2874F0 0%, #1e5fd0 100%);
+            color: #ffffff;
+            font-weight: 800;
+            font-size: 15px;
+            cursor: pointer;
+            box-shadow: 0 10px 24px rgba(40,116,240,0.35);
+            animation: fadeIn 0.5s ease 0.6s both;
+        }
+        .pickup-success-btn:active { transform: scale(0.97); }
+
+        .pickup-success-timer {
+            height: 3px;
+            border-radius: 3px;
+            background: #e2e8f0;
+            margin-top: 12px;
+            overflow: hidden;
+        }
+        .pickup-success-timer .bar {
+            height: 100%;
+            width: 100%;
+            background: linear-gradient(90deg, #2874F0, #FFE11B);
+            transform-origin: left;
+            animation: timerCountdown 5s linear forwards;
+        }
+        @keyframes timerCountdown {
+            from { transform: scaleX(1); }
+            to   { transform: scaleX(0); }
+        }
+
+        /* Confetti */
+        .pickup-confetti {
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            overflow: hidden;
+            z-index: 9999;
+        }
+        .pickup-confetti span {
+            position: absolute;
+            top: -20px;
+            width: 8px;
+            height: 14px;
+            border-radius: 2px;
+            opacity: 0;
+            animation: confettiFall linear forwards;
+        }
+        @keyframes confettiFall {
+            0%   { opacity: 0; transform: translateY(0) rotate(0deg); }
+            10%  { opacity: 1; }
+            100% { opacity: 0; transform: translateY(110vh) rotate(720deg); }
+        }
+
+        /* =========================================================
+           OUTSIDE PICKUP — NEW FEATURE (minimal additive CSS)
+           ========================================================= */
+        .outside-pickup-btn {
+            background: linear-gradient(135deg, #7c3aed 0%, #4f46e5 100%);
+            color: #fff;
+            border-radius: 20px;
+            padding: 20px;
+            box-shadow: 0 12px 32px rgba(124,58,237,0.35);
+            position: relative;
+            overflow: hidden;
+            width: 100%;
+            text-align: left;
+            border: none;
+            cursor: pointer;
+            transition: transform 0.15s ease;
+        }
+        .outside-pickup-btn:active { transform: scale(0.97); }
+        .outside-pickup-btn::after {
+            content: '';
+            position: absolute;
+            top: -40%; right: -20%;
+            width: 200px; height: 200px;
+            background: radial-gradient(circle, rgba(255,255,255,0.15), transparent 70%);
+            border-radius: 50%;
+            pointer-events: none;
+        }
+        .outside-pickup-id-box {
+            background: linear-gradient(135deg, #faf5ff 0%, #f3e8ff 100%);
+            border: 2px solid #d8b4fe;
+            border-radius: 16px;
+            padding: 16px;
+            text-align: center;
+            margin-bottom: 16px;
+        }
+        .outside-pickup-id-label {
+            font-size: 10px;
+            font-weight: 800;
+            letter-spacing: 1.5px;
+            color: #7c3aed;
+            text-transform: uppercase;
+            margin-bottom: 4px;
+        }
+        .outside-pickup-id-value {
+            font-family: ui-monospace, Menlo, monospace;
+            font-size: 18px;
+            font-weight: 800;
+            color: #4c1d95;
+            letter-spacing: 0.5px;
+            word-break: break-all;
+        }
     </style>
 </head>
 
 <!-- === SECTION 4: BODY START, OFFLINE BANNER & AUTH OVERLAY (LOGIN) === -->
 <body class="no-scrollbar">
 
+    <!-- FLIPKART OMS SPLASH — Flipkart + Om Sai Ram Communication -->
+    <div id="splashScreen" class="splash-screen is-hidden" aria-hidden="true">
+        <div class="splash-bg"></div>
+        <div class="splash-orb splash-orb-1"></div>
+        <div class="splash-orb splash-orb-2"></div>
+        <div class="splash-orb splash-orb-3"></div>
+
+        <div class="splash-content">
+            <div class="splash-logo">
+                <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                    <defs>
+                        <linearGradient id="fkGrad" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stop-color="#ffffff"/>
+                            <stop offset="100%" stop-color="#dbeafe"/>
+                        </linearGradient>
+                    </defs>
+                    <path d="M18 22h28l-3 30a4 4 0 0 1-4 3.5H25a4 4 0 0 1-4-3.5L18 22z"
+                          fill="none" stroke="url(#fkGrad)" stroke-width="3.4" stroke-linejoin="round"/>
+                    <path d="M24 22v-3a8 8 0 0 1 16 0v3"
+                          fill="none" stroke="url(#fkGrad)" stroke-width="3.4" stroke-linecap="round"/>
+                    <circle cx="26" cy="33" r="1.9" fill="#FFE11B"/>
+                    <circle cx="38" cy="33" r="1.9" fill="#FFE11B"/>
+                    <path d="M25 40c1.8 2 4.2 3 7 3s5.2-1 7-3"
+                          fill="none" stroke="url(#fkGrad)" stroke-width="2.6" stroke-linecap="round"/>
+                </svg>
+            </div>
+            <h1 class="splash-brand">Flipkart<span class="dot">.</span></h1>
+            <div class="splash-divider">
+                <span class="line"></span>
+                <span class="diamond"></span>
+                <span class="line"></span>
+            </div>
+            <p class="splash-partner">Om Sai Ram Communication</p>
+            <span class="splash-partner-sub">Pickup Partner</span>
+            <div class="splash-loader">
+                <span></span><span></span><span></span>
+            </div>
+        </div>
+        <div class="splash-footer">Loading Experience</div>
+    </div>
+
     <!-- Offline Banner -->
     <div id="offlineBanner" class="bg-red-500 text-white text-center py-2 text-sm font-semibold hidden">
         📡 Offline - Data will sync when back online
     </div>
 
-    <!-- ===== AUTH OVERLAY (Login Only) ===== -->
+    <!-- ===== AUTH OVERLAY (Login Only) — Flipkart branding ===== -->
     <div id="authOverlay" class="auth-overlay">
         <div class="auth-box slide-up">
-            <div class="logo-icon">
-                <i data-lucide="package"></i>
+            <div class="flipkart-login-brand">
+                <div class="flipkart-login-logo">
+                    <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                        <path d="M18 22h28l-3 30a4 4 0 0 1-4 3.5H25a4 4 0 0 1-4-3.5L18 22z"
+                              fill="none" stroke="#ffffff" stroke-width="3.4" stroke-linejoin="round"/>
+                        <path d="M24 22v-3a8 8 0 0 1 16 0v3"
+                              fill="none" stroke="#ffffff" stroke-width="3.4" stroke-linecap="round"/>
+                        <circle cx="26" cy="33" r="1.9" fill="#FFE11B"/>
+                        <circle cx="38" cy="33" r="1.9" fill="#FFE11B"/>
+                        <path d="M25 40c1.8 2 4.2 3 7 3s5.2-1 7-3"
+                              fill="none" stroke="#ffffff" stroke-width="2.6" stroke-linecap="round"/>
+                    </svg>
+                </div>
+                <div class="flipkart-login-wordmark">Flipkart<span class="dot">.</span></div>
+                <div class="flipkart-login-tagline">Om Sai Ram Communication</div>
             </div>
+
             <h2>Welcome Back</h2>
             <p class="sub">Login to your agent account</p>
 
@@ -685,10 +1252,8 @@
     </div>
 
     <!-- === SECTION 5: MAIN APP HEADER === -->
-    <!-- ===== MAIN APP ===== -->
     <div id="mainApp" class="max-w-md mx-auto min-h-screen pb-8" style="display:none;">
 
-        <!-- Header -->
         <div class="glass sticky top-0 z-40 px-5 py-4 shadow-lg">
             <div class="flex items-center justify-between">
                 <div class="flex items-center gap-3">
@@ -719,11 +1284,9 @@
             </div>
         </div>
 
-        <!-- Content Area -->
         <div class="px-4 py-5">
 
             <!-- === SECTION 6: TAB BAR NAVIGATION === -->
-            <!-- ===== TAB BAR: Pickup | Pending | Attendance ===== -->
             <div class="tab-bar mb-4" id="mainTabBar">
                 <button class="active" data-tab="pickup" onclick="switchTab('pickup')">
                     <i data-lucide="package-check"></i> Pickup
@@ -732,19 +1295,127 @@
                     <i data-lucide="list-todo"></i> Pending
                     <span id="pendingCountBadgeMain" class="pending-badge">0</span>
                 </button>
-                <!-- 🔥 Added id="attendanceTabBtn" so admin can hide it -->
                 <button data-tab="attendance" id="attendanceTabBtn" onclick="switchTab('attendance')">
                     <i data-lucide="clipboard-check"></i> Attendance
                 </button>
             </div>
 
-            <!-- === SECTION 7: TAB CONTENT - PICKUP (Order ID, Status, Stats, Dynamic Form) === -->
-            <!-- ===== TAB: PICKUP ===== -->
+            <!-- ============================================================ -->
+            <!-- OUTSIDE PICKUP PAGE (NEW — hidden by default)                -->
+            <!-- ============================================================ -->
+            <div id="outsidePickupPage" style="display:none;">
+                <!-- Header -->
+                <div class="glass rounded-2xl p-4 shadow-lg mb-4 flex items-center justify-between">
+                    <button onclick="closeOutsidePickup()" class="flex items-center gap-2 text-purple-600 font-bold">
+                        <i data-lucide="arrow-left" class="w-5 h-5"></i>
+                        <span>Back</span>
+                    </button>
+                    <div class="flex items-center gap-2">
+                        <div class="w-8 h-8 bg-gradient-to-br from-purple-600 to-indigo-600 rounded-xl flex items-center justify-center">
+                            <i data-lucide="map-pin" class="w-4 h-4 text-white"></i>
+                        </div>
+                        <div>
+                            <div class="text-xs font-bold text-gray-800">Outside Pickup</div>
+                            <div class="text-[10px] text-gray-500">Manual Entry</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ID Card -->
+                <div class="outside-pickup-id-box">
+                    <div class="outside-pickup-id-label">PICKUP ID (AUTO-GENERATED)</div>
+                    <div id="outsidePickupIdDisplay" class="outside-pickup-id-value">—</div>
+                </div>
+
+                <!-- Form -->
+                <div class="glass rounded-2xl p-5 shadow-xl space-y-4">
+                    <div>
+                        <label class="text-xs font-bold text-gray-500 mb-1.5 block">PHONE MODEL <span class="text-red-500">*</span></label>
+                        <input type="text" id="opPhoneModel" placeholder="e.g., iPhone 12, Samsung S21" class="input-field w-full p-3.5 rounded-xl outline-none">
+                    </div>
+
+                    <div>
+                        <label class="text-xs font-bold text-gray-500 mb-1.5 block">FULL IMEI NUMBER <span class="text-red-500">*</span></label>
+                        <div class="relative">
+                            <input type="text" id="opImei" placeholder="15-digit IMEI" class="input-field w-full p-3.5 rounded-xl outline-none pr-28 font-mono" inputmode="numeric" maxlength="15">
+                            <button onclick="openOutsideScanner()" class="btn-scan-imei absolute right-1.5 top-1/2 -translate-y-1/2">
+                                <i data-lucide="scan-line"></i> Scan
+                            </button>
+                        </div>
+                        <p class="text-xs text-gray-400 mt-1.5">📱 Scan barcode or *#06# screen</p>
+                    </div>
+
+                    <div>
+                        <label class="text-xs font-bold text-gray-500 mb-1.5 block">AGREED VALUE (₹) <span class="text-red-500">*</span></label>
+                        <div class="relative">
+                            <span class="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-500 font-bold">₹</span>
+                            <input type="number" id="opValue" placeholder="0" class="input-field w-full p-3.5 pl-8 rounded-xl outline-none font-bold text-lg" inputmode="numeric" min="1">
+                        </div>
+                    </div>
+
+                    <!-- RAM -->
+                    <div class="spec-group">
+                        <div class="spec-label"><span class="t">RAM <span class="text-red-500">*</span></span><span class="picked empty" id="opRamPick">Not selected</span></div>
+                        <div class="chip-grid" id="opRamChips"></div>
+                    </div>
+
+                    <!-- Storage -->
+                    <div class="spec-group mt-3">
+                        <div class="spec-label"><span class="t">STORAGE / ROM <span class="text-red-500">*</span></span><span class="picked empty" id="opStoragePick">Not selected</span></div>
+                        <div class="chip-grid" id="opStorageChips"></div>
+                    </div>
+
+                    <!-- Network -->
+                    <div class="spec-group mt-3">
+                        <div class="spec-label"><span class="t">NETWORK <span class="text-red-500">*</span></span><span class="picked empty" id="opNetworkPick">Not selected</span></div>
+                        <div class="chip-grid cols-5" id="opNetworkChips"></div>
+                    </div>
+
+                    <!-- Photos -->
+                    <div class="pt-2 border-t border-gray-100">
+                        <label class="text-xs font-bold text-gray-500 mb-1.5 block">PHONE PHOTOS <span class="text-red-500">*</span> <span class="text-gray-400 font-normal">(min 1, max 5)</span></label>
+                        <div class="grid grid-cols-2 gap-2">
+                            <label for="opPhotoCam" class="btn-bounce cursor-pointer flex items-center justify-center gap-2 p-3 rounded-xl border-2 border-dashed border-purple-300 bg-purple-50 text-purple-700 font-semibold text-sm">
+                                <i data-lucide="camera" class="w-4 h-4"></i> Camera
+                            </label>
+                            <label for="opPhotoGal" class="btn-bounce cursor-pointer flex items-center justify-center gap-2 p-3 rounded-xl border-2 border-dashed border-purple-300 bg-purple-50 text-purple-700 font-semibold text-sm">
+                                <i data-lucide="image" class="w-4 h-4"></i> Gallery
+                            </label>
+                        </div>
+                        <input id="opPhotoCam" type="file" accept="image/*" capture="environment" class="hidden" onchange="handleOutsidePhotoPick(this)">
+                        <input id="opPhotoGal" type="file" accept="image/*" multiple class="hidden" onchange="handleOutsidePhotoPick(this)">
+                        <div id="opPhotoPreview" class="mt-2"></div>
+                        <div id="opPhotoInfo" class="text-[11px] text-gray-500 mt-1">0 photos added · min 1 required</div>
+                    </div>
+
+                    <!-- Optional fields -->
+                    <div class="pt-3 border-t border-gray-100">
+                        <p class="text-xs font-bold text-gray-500 mb-2 tracking-wide">OPTIONAL DETAILS</p>
+                        <div class="mb-3">
+                            <label class="text-xs font-semibold text-gray-500 mb-1 block">Customer Name</label>
+                            <input type="text" id="opCustomerName" placeholder="Optional" class="input-field w-full p-3 rounded-xl outline-none">
+                        </div>
+                        <div class="mb-3">
+                            <label class="text-xs font-semibold text-gray-500 mb-1 block">Aadhaar Number</label>
+                            <input type="text" id="opAadhaarNumber" placeholder="12-digit Aadhaar (optional)" inputmode="numeric" maxlength="14" class="input-field w-full p-3 rounded-xl outline-none font-mono">
+                        </div>
+                        <div>
+                            <label class="text-xs font-semibold text-gray-500 mb-1 block">Bill Number</label>
+                            <input type="text" id="opBillNumber" placeholder="Bill / Invoice no. (optional)" class="input-field w-full p-3 rounded-xl outline-none">
+                        </div>
+                    </div>
+                </div>
+
+                <button onclick="reviewOutsidePickup()" class="btn-bounce w-full bg-gradient-to-r from-purple-600 to-indigo-600 text-white p-4 rounded-2xl font-bold text-lg shadow-xl flex items-center justify-center gap-2 mt-4">
+                    <i data-lucide="check-circle" class="w-5 h-5"></i>
+                    <span>Review & Submit</span>
+                </button>
+            </div>
+
+            <!-- === SECTION 7: TAB CONTENT - PICKUP === -->
             <div id="tab-pickup" class="tab-content">
-                <!-- STEP 1: Order ID + Status Selection -->
                 <div id="step-order" class="space-y-4 fade-in">
 
-                    <!-- Order ID Card -->
                     <div class="glass rounded-2xl p-5 shadow-xl">
                         <label class="flex items-center gap-2 text-sm font-bold text-gray-700 mb-3">
                             <i data-lucide="hash" class="w-4 h-4 text-blue-600"></i>
@@ -760,7 +1431,6 @@
                         </div>
                     </div>
 
-                    <!-- Status Selection -->
                     <div class="glass rounded-2xl p-5 shadow-xl">
                         <label class="flex items-center gap-2 text-sm font-bold text-gray-700 mb-3">
                             <i data-lucide="list-checks" class="w-4 h-4 text-blue-600"></i>
@@ -800,7 +1470,22 @@
                         </div>
                     </div>
 
-                    <!-- Today's Stats -->
+                    <!-- 🆕 OUTSIDE PICKUP BUTTON -->
+                    <button onclick="openOutsidePickup()" class="outside-pickup-btn">
+                        <div class="flex items-center justify-between gap-3 relative z-10">
+                            <div class="flex items-center gap-3">
+                                <div class="w-12 h-12 bg-white/25 rounded-2xl flex items-center justify-center flex-shrink-0">
+                                    <i data-lucide="map-pin" class="w-6 h-6"></i>
+                                </div>
+                                <div>
+                                    <div class="font-bold text-base">Outside Pickup</div>
+                                    <div class="text-[11px] opacity-90 mt-0.5">No order ID? Create manual pickup</div>
+                                </div>
+                            </div>
+                            <i data-lucide="chevron-right" class="w-5 h-5 flex-shrink-0"></i>
+                        </div>
+                    </button>
+
                     <div class="glass rounded-2xl p-5 shadow-xl">
                         <div class="flex items-center justify-between mb-3">
                             <h3 class="text-sm font-bold text-gray-700 flex items-center gap-2">
@@ -829,7 +1514,6 @@
                     </div>
                 </div>
 
-                <!-- STEP 2: Dynamic Form -->
                 <div id="step-form" class="hidden space-y-4 slide-up">
 
                     <button onclick="goBack()" class="btn-bounce flex items-center gap-2 text-blue-600 font-bold px-4 py-2 rounded-xl glass shadow">
@@ -864,7 +1548,6 @@
             </div>
 
             <!-- === SECTION 8: TAB CONTENT - PENDING ORDERS === -->
-            <!-- ===== TAB: PENDING ===== -->
             <div id="tab-pending" class="tab-content" style="display:none;">
                 <div class="glass rounded-2xl p-5 shadow-xl">
                     <div class="flex items-center justify-between mb-3">
@@ -879,7 +1562,6 @@
                         </button>
                     </div>
 
-                    <!-- Tab: All / On the way -->
                     <div class="tab-bar" id="pendingTabBar">
                         <button class="active" data-filter="all" onclick="setPendingFilter('all')">
                             <i data-lucide="list"></i> All
@@ -900,49 +1582,73 @@
             </div>
 
             <!-- === SECTION 9: TAB CONTENT - ATTENDANCE === -->
-            <!-- ===== TAB: ATTENDANCE ===== -->
-            <div id="tab-attendance" class="tab-content" style="display:none;">
-                <div class="glass rounded-2xl p-5 shadow-xl space-y-4">
-                    <div class="flex items-center justify-between">
-                        <h3 class="text-sm font-bold text-gray-700 flex items-center gap-2">
-                            <i data-lucide="clipboard-check" class="w-4 h-4 text-purple-600"></i>
-                            Today's Attendance
-                        </h3>
-                        <span id="attendanceDateDisplay" class="text-xs text-gray-500"></span>
-                    </div>
-
-                    <!-- Status display -->
-                    <div id="attendanceStatusBox" class="p-3 rounded-xl bg-gray-50 text-center">
-                        <span class="attendance-status not-marked">Not Marked</span>
-                        <p class="text-xs text-gray-400 mt-1">Please enter the OTP to mark your attendance</p>
-                    </div>
-
-                    <!-- OTP Input -->
-                    <div class="otp-input-box">
-                        <input type="text" id="otpInput" placeholder="Enter OTP" maxlength="6" inputmode="numeric" pattern="[0-9]*" />
-                        <button id="verifyOtpBtn" onclick="verifyOTP()">Verify</button>
-                    </div>
-
-                    <!-- Refresh OTP button -->
-                    <button onclick="refreshOTP()" class="text-xs text-blue-600 font-semibold flex items-center gap-1">
-                        <i data-lucide="refresh-cw" class="w-3 h-3"></i> Refresh OTP
-                    </button>
-
-                    <!-- Attendance History (last 7 days) -->
-                    <div class="mt-4 border-t border-gray-200 pt-4">
-                        <h4 class="text-xs font-bold text-gray-500 mb-2">📅 Last 7 days</h4>
-                        <div id="attendanceHistory" class="attendance-history">
-                            <div class="text-sm text-gray-400 text-center">Loading...</div>
-                        </div>
-                    </div>
+    <div id="tab-attendance" class="tab-content" style="display:none;">
+        <div class="glass rounded-2xl p-5 shadow-sm border border-gray-100 mb-4">
+            <div class="flex items-center justify-between mb-3">
+                <div>
+                    <h2 class="text-base font-bold text-gray-800">Daily Attendance</h2>
+                    <p id="attendanceDateDisplay" class="text-xs text-gray-500 font-medium"></p>
+                </div>
+                <div id="attendanceBadgeContainer">
+                    <span id="currentStatusBadge" class="px-3 py-1 text-xs font-semibold rounded-full bg-gray-100 text-gray-600">Unmarked</span>
                 </div>
             </div>
 
+            <div id="attendanceActionGrid" class="grid grid-cols-2 gap-3 mt-3">
+                <button type="button" id="btnMarkPresent" onclick="openAttendanceOtpModal()" class="btn-bounce p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 flex flex-col items-center justify-center gap-1 hover:bg-emerald-100">
+                    <span class="text-2xl">✅</span>
+                    <span class="font-bold text-sm">Present</span>
+                    <span class="text-[10px] text-emerald-600 font-medium">Requires Admin OTP</span>
+                </button>
+                <button type="button" id="btnMarkAbsent" onclick="handleMarkAbsent()" class="btn-bounce p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 flex flex-col items-center justify-center gap-1 hover:bg-rose-100">
+                    <span class="text-2xl">❌</span>
+                    <span class="font-bold text-sm">Non-Present</span>
+                    <span class="text-[10px] text-rose-600 font-medium">Mark as Absent</span>
+                </button>
+            </div>
+
+            <div id="attendanceLockNotice" class="hidden mt-4 p-3 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-800">
+                🔒 Attendance for today is recorded. Contact admin for any corrections.
+            </div>
+        </div>
+
+        <div id="salarySummaryCard" class="glass rounded-2xl p-5 shadow-sm border border-gray-100 mb-4">
+            <div class="flex items-center justify-between mb-3 border-b border-gray-100 pb-2">
+                <h3 class="text-sm font-bold text-gray-800 flex items-center gap-2">
+                    <span>💼</span> Salary Summary
+                </h3>
+                <span id="salaryStatusBadge" class="text-[11px] px-2.5 py-0.5 rounded-full font-semibold bg-gray-100 text-gray-600">Pending Approval</span>
+            </div>
+
+            <div id="salaryApprovedContent" class="space-y-2">
+                <div class="flex justify-between items-center text-xs text-gray-600">
+                    <span>Total Base Salary:</span>
+                    <span id="agentTotalSalary" class="font-semibold text-gray-800">₹0</span>
+                </div>
+                <div class="flex justify-between items-center text-xs text-rose-600">
+                    <span>Deductions / Half-day:</span>
+                    <span id="agentDeductions" class="font-semibold">-₹0</span>
+                </div>
+                <div class="flex justify-between items-center text-sm font-bold text-emerald-700 pt-2 border-t border-gray-100">
+                    <span>Final Payable:</span>
+                    <span id="agentFinalSalary">₹0</span>
+                </div>
+            </div>
+
+            <div id="salaryPendingNotice" class="text-xs text-gray-500 py-2 text-center">
+                Salary details will appear here once approved by Admin.
+            </div>
+        </div>
+
+        <div class="glass rounded-2xl p-5 shadow-sm border border-gray-100">
+            <h3 class="text-sm font-bold text-gray-800 mb-3">Recent Attendance</h3>
+            <div id="attendanceHistoryList" class="space-y-2 text-xs">
+                <div class="text-center text-gray-400 py-3">Loading history...</div>
+            </div>
         </div>
     </div>
 
     <!-- === SECTION 10: SCANNER MODAL (IMEI/OCR) === -->
-    <!-- Scanner Modal (unchanged) -->
     <div id="scannerModal" class="hidden fixed inset-0 scanner-overlay z-50 flex items-center justify-center p-4">
         <div class="bg-white rounded-3xl p-5 w-full max-w-sm shadow-2xl">
             <div class="flex items-center justify-between mb-3">
@@ -955,7 +1661,6 @@
                 </button>
             </div>
 
-            <!-- Mode Toggle -->
             <div class="mode-toggle" id="scanModeToggle">
                 <button class="active" data-mode="barcode" onclick="setScanMode('barcode')">
                     <i data-lucide="barcode" class="w-3.5 h-3.5 inline mr-1"></i> Barcode
@@ -983,17 +1688,14 @@
                 <span id="scanStatusText">Initializing camera...</span>
             </div>
 
-            <!-- OCR Progress -->
             <div class="ocr-progress" id="ocrProgress" style="display:none;">
                 <div class="bar" id="ocrProgressBar"></div>
             </div>
 
-            <!-- IMEI Result -->
             <div class="imei-result" id="imeiResult">
                 <span id="imeiResultText"></span>
             </div>
 
-            <!-- Capture Button (for OCR mode) -->
             <button class="btn-capture" id="captureBtn" onclick="startOCRScanning()" style="display:none;">
                 <i data-lucide="camera"></i>
                 Capture & Read IMEI
@@ -1013,6 +1715,256 @@
 
     <!-- === SECTION 11: EXTERNAL SCRIPT LINK & CLOSING TAGS === -->
     <script src="script.js"></script>
+
+<!-- ================================================================ -->
+<!-- PICKUP COMPLETED SUCCESS OVERLAY (Flipkart)                       -->
+<!-- ================================================================ -->
+<div id="pickupSuccessOverlay" class="pickup-success-overlay" aria-hidden="true">
+    <div class="pickup-success-card" role="dialog" aria-modal="true" aria-labelledby="pickupSuccessTitle">
+        <div class="pickup-success-check">
+            <svg viewBox="0 0 52 52" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                <path d="M14 27l8 8 16-16"/>
+            </svg>
+        </div>
+
+        <h2 id="pickupSuccessTitle" class="pickup-success-title">Pickup Completed!</h2>
+        <p class="pickup-success-sub">Order details submitted successfully</p>
+
+        <div class="pickup-success-orderid">
+            <span class="lbl">ORDER ID</span>
+            <span class="val" id="pickupSuccessOrderId">—</span>
+        </div>
+
+        <div class="pickup-success-details" id="pickupSuccessDetails"></div>
+
+        <button type="button" class="pickup-success-btn" onclick="hidePickupCompletion()">
+            Continue
+        </button>
+
+        <div class="pickup-success-timer"><div class="bar"></div></div>
+    </div>
+</div>
+<div class="pickup-confetti" id="pickupConfetti" aria-hidden="true"></div>
+
+<!-- ================================================================ -->
+<!-- FLIPKART OMS SPLASH CONTROLLER                                    -->
+<!-- ================================================================ -->
+<script>
+    (function () {
+        const SPLASH_KEY        = 'flipkart_casper_splash_ts';
+        const SPLASH_COOLDOWN   = 5 * 60 * 1000;
+        const SPLASH_DURATION   = 1800;
+        const FADE_OUT_MS       = 750;
+
+        function shouldShowSplash() {
+            try {
+                const last = parseInt(sessionStorage.getItem(SPLASH_KEY) || '0', 10);
+                return (Date.now() - last) > SPLASH_COOLDOWN;
+            } catch (e) { return true; }
+        }
+
+        function triggerSplash() {
+            const el = document.getElementById('splashScreen');
+            if (!el) return;
+            if (!shouldShowSplash()) { el.classList.add('is-hidden'); return; }
+            try { sessionStorage.setItem(SPLASH_KEY, String(Date.now())); } catch (e) {}
+            el.classList.remove('is-hidden', 'fade-out');
+            el.setAttribute('aria-hidden', 'false');
+            void el.offsetWidth;
+            setTimeout(function () {
+                el.classList.add('fade-out');
+                el.setAttribute('aria-hidden', 'true');
+                setTimeout(function () {
+                    el.classList.add('is-hidden');
+                    el.classList.remove('fade-out');
+                }, FADE_OUT_MS);
+            }, SPLASH_DURATION);
+        }
+
+        const _origShowMainApp = window.showMainApp;
+        if (typeof _origShowMainApp === 'function') {
+            window.showMainApp = function () {
+                _origShowMainApp.apply(this, arguments);
+                setTimeout(triggerSplash, 80);
+            };
+        } else {
+            window.addEventListener('load', function () {
+                if (typeof window.showMainApp === 'function' && !window.__fkSplashHooked) {
+                    window.__fkSplashHooked = true;
+                    const orig = window.showMainApp;
+                    window.showMainApp = function () {
+                        orig.apply(this, arguments);
+                        setTimeout(triggerSplash, 80);
+                    };
+                }
+                const mainApp = document.getElementById('mainApp');
+                if (mainApp && mainApp.style.display !== 'none') {
+                    setTimeout(triggerSplash, 200);
+                }
+            });
+        }
+        window.__fkTriggerSplash = triggerSplash;
+    })();
+</script>
+
+<!-- ================================================================ -->
+<!-- PICKUP COMPLETED SUCCESS CONTROLLER                               -->
+<!-- ================================================================ -->
+<script>
+    (function () {
+        const overlay     = document.getElementById('pickupSuccessOverlay');
+        const orderIdEl   = document.getElementById('pickupSuccessOrderId');
+        const detailsEl   = document.getElementById('pickupSuccessDetails');
+        const confettiEl  = document.getElementById('pickupConfetti');
+        let   autoHideT   = null;
+
+        const CONFETTI_COLORS = ['#2874F0', '#FFE11B', '#FB641B', '#10b981', '#a855f7', '#22d3ee'];
+
+        function escapeHtml(s) {
+            return String(s == null ? '' : s)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+
+        function scrapeFormDetails() {
+            const details = [];
+            const container = document.getElementById('formFields');
+            if (!container) return details;
+
+            const seen = new Set();
+            container.querySelectorAll('input, select, textarea').forEach(function (el) {
+                const val = (el.value || '').trim();
+                if (!val) return;
+                if (el.type === 'checkbox' && !el.checked) return;
+                let label = '';
+                const wrapper = el.closest('div, label');
+                if (wrapper) {
+                    const lbl = wrapper.querySelector('label');
+                    if (lbl) label = lbl.textContent.trim();
+                }
+                if (!label && el.id) {
+                    const l = container.querySelector('label[for="' + el.id + '"]');
+                    if (l) label = l.textContent.trim();
+                }
+                if (!label) label = el.getAttribute('placeholder') || el.name || el.id || 'Field';
+                const key = label + '::' + val;
+                if (seen.has(key)) return;
+                seen.add(key);
+                let display = val;
+                if (el.tagName === 'SELECT' && el.selectedIndex >= 0) {
+                    display = el.options[el.selectedIndex].text || val;
+                }
+                details.push({ label: label, value: display });
+            });
+
+            const specGroups = container.querySelectorAll('.spec-group');
+            specGroups.forEach(function (group) {
+                const titleEl = group.querySelector('.spec-label .t');
+                const title = titleEl ? titleEl.textContent.trim() : '';
+                const chips = group.querySelectorAll('.spec-chip.active');
+                if (chips.length) {
+                    const vals = Array.from(chips).map(function (c) {
+                        return c.childNodes[0] ? c.childNodes[0].textContent.trim() : c.textContent.trim();
+                    });
+                    if (title) details.push({ label: title, value: vals.join(' + ') });
+                }
+            });
+
+            const imeiRes = document.getElementById('imeiResult');
+            if (imeiRes && imeiRes.classList.contains('show')) {
+                const t = (document.getElementById('imeiResultText')?.textContent || '').trim();
+                if (t) details.push({ label: 'IMEI', value: t });
+            }
+            return details;
+        }
+
+        function buildConfetti() {
+            confettiEl.innerHTML = '';
+            const count = 42;
+            for (let i = 0; i < count; i++) {
+                const s = document.createElement('span');
+                s.style.left = Math.random() * 100 + 'vw';
+                s.style.background = CONFETTI_COLORS[i % CONFETTI_COLORS.length];
+                s.style.animationDuration = (1.6 + Math.random() * 1.6) + 's';
+                s.style.animationDelay = (Math.random() * 0.5) + 's';
+                s.style.width = (6 + Math.random() * 6) + 'px';
+                s.style.height = (10 + Math.random() * 8) + 'px';
+                s.style.transform = 'rotate(' + (Math.random() * 360) + 'deg)';
+                confettiEl.appendChild(s);
+            }
+            setTimeout(function () { confettiEl.innerHTML = ''; }, 4200);
+        }
+
+        function showPickupCompletion(payload) {
+            payload = payload || {};
+            const orderId = payload.orderId || (document.getElementById('orderId')?.value || '').trim() || '—';
+            const details = payload.details || scrapeFormDetails();
+            orderIdEl.textContent = orderId;
+            detailsEl.innerHTML = '';
+            if (!details.length) {
+                const row = document.createElement('div');
+                row.className = 'row';
+                row.innerHTML = '<span class="k">Status</span><span class="v">Pickup Completed</span>';
+                detailsEl.appendChild(row);
+            } else {
+                details.forEach(function (d, i) {
+                    const row = document.createElement('div');
+                    row.className = 'row';
+                    row.style.animationDelay = (0.5 + i * 0.05) + 's';
+                    row.innerHTML = '<span class="k">' + escapeHtml(d.label) + '</span>' + '<span class="v">' + escapeHtml(d.value) + '</span>';
+                    detailsEl.appendChild(row);
+                });
+            }
+            overlay.classList.add('show');
+            overlay.setAttribute('aria-hidden', 'false');
+            buildConfetti();
+            clearTimeout(autoHideT);
+            autoHideT = setTimeout(hidePickupCompletion, 5000);
+        }
+
+        function hidePickupCompletion() {
+            overlay.classList.remove('show');
+            overlay.setAttribute('aria-hidden', 'true');
+            clearTimeout(autoHideT);
+        }
+
+        window.showPickupCompletion = showPickupCompletion;
+        window.hidePickupCompletion = hidePickupCompletion;
+
+        function isPickupContext() {
+            const titleEl = document.getElementById('formTitle');
+            const title = (titleEl?.textContent || '').toLowerCase();
+            if (!title) return false;
+            if (/reject/.test(title)) return false;
+            if (/reschedule|pending/.test(title)) return false;
+            return /pickup/.test(title);
+        }
+
+        window.addEventListener('load', function () {
+            if (typeof window.submitData === 'function' && !window.__fkPickupHooked) {
+                window.__fkPickupHooked = true;
+                const orig = window.submitData;
+                window.submitData = function () {
+                    const wasPickup = isPickupContext();
+                    const capturedOrderId = (document.getElementById('orderId')?.value || '').trim();
+                    const capturedDetails = wasPickup ? scrapeFormDetails() : null;
+                    let result;
+                    try { result = orig.apply(this, arguments); }
+                    catch (err) { throw err; }
+                    if (wasPickup) {
+                        setTimeout(function () {
+                            showPickupCompletion({
+                                orderId: capturedOrderId,
+                                details: capturedDetails
+                            });
+                        }, 900);
+                    }
+                    return result;
+                };
+            }
+        });
+    })();
+</script>
 
 </body>
 </html>
