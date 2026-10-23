@@ -25,6 +25,7 @@ function getLocalDate() {
 // === SECTION 3: GLOBAL STATE ===
 let currentUser = null;
 let currentStatus = '';
+let attendanceGateOpen = false;
 let selectedReason = '';
 let zxingCodeReader = null;
 let isScanning = false;
@@ -317,6 +318,7 @@ async function loginUser() {
 }
 
 function logoutUser() {
+    if (attendanceGateOpen) Swal.close();
     stopUserExistenceCheck();
     localStorage.removeItem('flipkart_agent_user');
     currentUser = null;
@@ -451,6 +453,7 @@ async function checkAttendanceAndBlock() {
         updateAttendanceUI('unmarked');
         loadAttendanceHistory();
         loadAgentSalarySummary();
+        showAttendanceOtpGate();
     } catch (e) { console.error('Error checking attendance:', e); }
 }
 
@@ -496,41 +499,112 @@ async function openAttendanceOtpModal() {
         cancelButtonText: 'Cancel', confirmButtonColor: '#059669', cancelButtonColor: '#64748b'
     });
     if (!isConfirmed || !otp) return;
-    const trimmedOtp = otp.trim();
-    if (trimmedOtp.length !== 6) {
-        Swal.fire({ icon: 'error', title: 'Invalid OTP', text: 'Please enter a valid 6-digit OTP.' });
-        return;
-    }
     try {
-        let otpData = null;
-        const dailySnap = await db.ref('daily_otp/' + today + '/' + currentUser.username).once('value');
-        if (dailySnap.exists()) otpData = dailySnap.val();
-        else {
-            const agentOtpSnap = await db.ref('otp/' + currentUser.username).once('value');
-            if (agentOtpSnap.exists()) otpData = agentOtpSnap.val();
-        }
-        if (!otpData || String(otpData.otp).trim() !== trimmedOtp) {
-            Swal.fire({ icon: 'error', title: 'Incorrect OTP', text: "The OTP entered is incorrect. Ask Admin for today's OTP." });
-            return;
-        }
-        if (otpData.used === true) {
-            Swal.fire({ icon: 'error', title: 'OTP Already Used', text: 'This OTP has already been used.' });
-            return;
-        }
-        await db.ref('attendance/' + currentUser.username + '/' + today).set({
-            status: 'present', timestamp: Date.now(), otp_used: trimmedOtp,
-            blocked: false, salary_counted: true, marked_by: 'agent_otp'
-        });
-        if (dailySnap.exists()) await db.ref('daily_otp/' + today + '/' + currentUser.username + '/used').set(true);
-        else await db.ref('otp/' + currentUser.username + '/used').set(true);
+        await markAttendanceWithOtp(otp);
         showToast('✅ Attendance marked Present!', 'success');
         updateAttendanceUI('present');
         loadAttendanceHistory();
         loadAgentSalarySummary();
     } catch (e) {
-        console.error('Error verifying attendance OTP:', e);
-        showToast('Verification failed. Check network.', 'error');
+        if (e.message === 'INVALID_OTP') {
+            Swal.fire({ icon: 'error', title: 'Invalid OTP', text: 'Please enter a valid 6-digit OTP.' });
+        } else if (e.message === 'INCORRECT_OTP') {
+            Swal.fire({ icon: 'error', title: 'Incorrect OTP', text: "The OTP entered is incorrect. Ask Admin for today's OTP." });
+        } else if (e.message === 'OTP_USED') {
+            Swal.fire({ icon: 'error', title: 'OTP Already Used', text: 'This OTP has already been used.' });
+        } else {
+            console.error('Error verifying attendance OTP:', e);
+            showToast('Verification failed. Check network.', 'error');
+        }
     }
+}
+
+async function markAttendanceWithOtp(otp) {
+    const trimmedOtp = String(otp || '').trim();
+    if (!/^\d{6}$/.test(trimmedOtp)) throw new Error('INVALID_OTP');
+
+    const today = getLocalDate();
+    let otpData = null;
+    const dailySnap = await db.ref('daily_otp/' + today + '/' + currentUser.username).once('value');
+    if (dailySnap.exists()) otpData = dailySnap.val();
+    else {
+        const agentOtpSnap = await db.ref('otp/' + currentUser.username).once('value');
+        if (agentOtpSnap.exists()) otpData = agentOtpSnap.val();
+    }
+    if (!otpData || String(otpData.otp).trim() !== trimmedOtp) throw new Error('INCORRECT_OTP');
+    if (otpData.used === true) throw new Error('OTP_USED');
+
+    await db.ref('attendance/' + currentUser.username + '/' + today).set({
+        status: 'present', timestamp: Date.now(), otp_used: trimmedOtp,
+        blocked: false, salary_counted: true, marked_by: 'agent_otp'
+    });
+    if (dailySnap.exists()) await db.ref('daily_otp/' + today + '/' + currentUser.username + '/used').set(true);
+    else await db.ref('otp/' + currentUser.username + '/used').set(true);
+}
+
+function showAttendanceOtpGate() {
+    if (!currentUser || currentUser.role === 'admin' || attendanceGateOpen) return;
+
+    const today = getLocalDate();
+    const attendanceRef = db.ref('attendance/' + currentUser.username + '/' + today);
+    let attendanceMarkedPresent = false;
+    const onAttendanceChange = snapshot => {
+        const attendance = snapshot.val();
+        if (!attendance || attendance.status !== 'present') return;
+        attendanceMarkedPresent = true;
+        updateAttendanceUI('present');
+        Swal.close();
+    };
+    const onAttendanceError = error => {
+        console.error('Attendance gate listener failed:', error);
+        showToast('Could not check attendance. Check your connection.', 'error');
+    };
+
+    attendanceGateOpen = true;
+    attendanceRef.on('value', onAttendanceChange, onAttendanceError);
+
+    Swal.fire({
+        title: '🔐 Verify Attendance OTP',
+        text: 'Enter today’s 6-digit OTP, or wait for Admin to mark you Present.',
+        input: 'text',
+        inputPlaceholder: '6-digit OTP',
+        inputAttributes: { maxlength: 6, inputmode: 'numeric', autocomplete: 'one-time-code' },
+        confirmButtonText: 'Verify & Continue',
+        confirmButtonColor: '#059669',
+        allowOutsideClick: false,
+        allowEscapeKey: false,
+        allowEnterKey: true,
+        showCancelButton: false,
+        preConfirm: async otp => {
+            try {
+                await markAttendanceWithOtp(otp);
+                return true;
+            } catch (e) {
+                const messages = {
+                    INVALID_OTP: 'Please enter a valid 6-digit OTP.',
+                    INCORRECT_OTP: "Incorrect OTP. Ask Admin for today's OTP.",
+                    OTP_USED: 'This OTP has already been used.'
+                };
+                if (!messages[e.message]) {
+                    console.error('Attendance OTP verification failed:', e);
+                    Swal.showValidationMessage('Verification failed. Check your connection and try again.');
+                    return false;
+                }
+                Swal.showValidationMessage(messages[e.message]);
+                return false;
+            }
+        }
+    }).then(result => {
+        attendanceRef.off('value', onAttendanceChange);
+        attendanceGateOpen = false;
+        if (attendanceMarkedPresent || result.isConfirmed) {
+            updateAttendanceUI('present');
+            loadAttendanceHistory();
+            loadAgentSalarySummary();
+            return;
+        }
+        if (currentUser) showAttendanceOtpGate();
+    });
 }
 
 async function handleMarkAbsent() {
@@ -1700,7 +1774,7 @@ async function openOutsidePickup() {
     document.getElementById('opAadhaarNumber').value = '';
     document.getElementById('opBillNumber').value = '';
     document.getElementById('opPhotoPreview').innerHTML = '';
-    document.getElementById('opPhotoInfo').textContent = '0 photos added · min 1 required';
+    document.getElementById('opPhotoInfo').textContent = '0 photos added · optional';
     updateOutsideSpecUI();
     lucide.createIcons();
 
@@ -1778,7 +1852,7 @@ function renderOutsidePhotos() {
     if (!preview) return;
     if (!outsidePickupImages.length) {
         preview.innerHTML = '';
-        if (info) info.textContent = '0 photos added · min 1 required';
+        if (info) info.textContent = '0 photos added · optional';
         return;
     }
     let totalKB = 0;
@@ -1837,8 +1911,6 @@ async function reviewOutsidePickup() {
     if (!opSelectedRam) { showToast('Select RAM', 'error'); return; }
     if (!opSelectedStorage) { showToast('Select Storage', 'error'); return; }
     if (!opSelectedNetwork) { showToast('Select Network', 'error'); return; }
-    if (outsidePickupImages.length < 1) { showToast('Add at least 1 phone photo', 'error'); return; }
-
     const summaryHtml = `
         <div style="text-align:left;font-size:13px;line-height:1.6;">
             <div style="background:linear-gradient(135deg,#faf5ff,#f3e8ff);border:1px solid #d8b4fe;border-radius:12px;padding:10px 12px;margin-bottom:10px;text-align:center;">
@@ -1850,7 +1922,7 @@ async function reviewOutsidePickup() {
             <p><strong>RAM / Storage:</strong> ${opSelectedRam} / ${opSelectedStorage}</p>
             <p><strong>Network:</strong> ${opSelectedNetwork}</p>
             <p><strong>Agreed Value:</strong> ₹${value.toLocaleString('en-IN')}</p>
-            <p><strong>Photos:</strong> ${outsidePickupImages.length} uploaded</p>
+            <p><strong>Photos:</strong> ${outsidePickupImages.length ? `${outsidePickupImages.length} uploaded` : 'None (optional)'}</p>
             ${customerName ? `<p><strong>Customer:</strong> ${escapeHtmlOP(customerName)}</p>` : ''}
             ${aadhaarNumber ? `<p><strong>Aadhaar:</strong> ${escapeHtmlOP(aadhaarNumber)}</p>` : ''}
             ${billNumber ? `<p><strong>Bill No:</strong> ${escapeHtmlOP(billNumber)}</p>` : ''}
@@ -1898,7 +1970,7 @@ async function submitOutsidePickup() {
         }
 
         // Upload photos to Firebase Storage
-        Swal.fire({ title: 'Uploading photos...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+        Swal.fire({ title: outsidePickupImages.length ? 'Uploading photos...' : 'Saving pickup...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
         const photoUrls = [];
         for (let i = 0; i < outsidePickupImages.length; i++) {
             try {
