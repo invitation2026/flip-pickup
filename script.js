@@ -1668,6 +1668,9 @@ function getISTDateTime() {
 //               extends to 10000+ naturally if needed)
 //   Backend uniqueness enforced by `outside_pickup_counters/{YYMMDD}`
 //   transaction — safe across concurrent riders, no collisions.
+//   IMPORTANT: the number is only RESERVED on a successful submit. Opening
+//   the form (or refreshing) merely PEEKS at the next number, so the shown
+//   ID never changes until a new pickup is actually created.
 // Record path: outside_pickups/{pickupId}
 // Inventory impact: NONE until admin approval (which writes to
 // `pickups/{pickupId}` and thus appears in existing inventory filters).
@@ -1681,6 +1684,11 @@ const OP_NETWORK_OPTIONS = ['1G','2G','3G','4G','5G'];
 let outsidePickupId = '';
 let outsidePickupImages = [];
 const OUTSIDE_MAX_IMAGES = 5;
+// Short-lived per-IMEI lock used to stop two concurrent submissions of the
+// same phone from creating two records. Expires by itself (no cleanup needed),
+// so a rejected/deleted pickup can be submitted again later.
+const OP_CLAIM_TTL_MS = 90 * 1000;
+let opSubmitInFlight = false;
 
 // ---- Chip helpers for Outside Pickup ----
 function buildOutsideChips(kind, options, extraClass) {
@@ -1711,14 +1719,96 @@ function updateOutsideSpecUI() {
     if (n) { n.textContent = opSelectedNetwork || 'Not selected'; n.className = 'picked' + (opSelectedNetwork ? '' : ' empty'); }
 }
 
+// ---- ID helpers: stable preview + transactional reservation ----
+function getOutsidePickupDateKey(d = new Date()) {
+    const yy = String(d.getFullYear()).slice(-2);
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${yy}${mm}${dd}`;
+}
+
+// READ-ONLY preview of the next ID. Does not increment the counter, so
+// opening / refreshing / re-opening the form always shows the same number.
+async function peekOutsidePickupId() {
+    const dateKey = getOutsidePickupDateKey();
+    const snap = await db.ref('outside_pickup_counters/' + dateKey).once('value');
+    const current = Number(snap.val()) || 0;
+    return `OP-${dateKey}-${String(current + 1).padStart(4, '0')}`;
+}
+
+// Give a number back when a submit fails before the record is saved, so a
+// failed attempt never burns a pickup number.
+async function releaseOutsidePickupCounter(pickupId) {
+    const m = /^OP-(\d{6})-(\d+)$/.exec(String(pickupId || ''));
+    if (!m) return;
+    const dateKey = m[1];
+    const seq = parseInt(m[2], 10);
+    try {
+        await db.ref('outside_pickup_counters/' + dateKey).transaction(current => {
+            if (current === null || current === undefined) return; // abort — nothing to release
+            const value = Number(current) || 0;
+            if (value !== seq) return; // someone already took a newer number — leave gap
+            return value > 1 ? value - 1 : null;
+        });
+    } catch (e) {
+        console.warn('Counter rollback failed:', e);
+    }
+}
+
+// ---- Duplicate protection helpers ----
+// Atomic, short-lived claim per IMEI: blocks two concurrent submissions of the
+// same phone. Auto-expires so a rejected pickup can be submitted again later.
+// If the database rules do not allow this helper node, we degrade gracefully
+// (returns supported:false) instead of breaking the submit flow.
+async function acquireOutsidePickupClaim(imei) {
+    try {
+        const nowTs = Date.now();
+        const result = await db.ref('outside_pickup_claims/' + imei).transaction(current => {
+            if (current && typeof current === 'object') {
+                const ts = Number(current.ts) || 0;
+                if (nowTs - ts < OP_CLAIM_TTL_MS) return; // abort — submission already running
+            }
+            return { ts: nowTs, by: currentUser.username };
+        });
+        return { supported: true, held: result.committed };
+    } catch (e) {
+        console.warn('Concurrency lock unavailable — continuing with duplicate checks only:', e);
+        return { supported: false, held: false };
+    }
+}
+
+function releaseOutsidePickupClaim(imei) {
+    return db.ref('outside_pickup_claims/' + imei).remove().catch(() => {});
+}
+
+// Returns the existing (non-rejected) outside pickup that already uses this
+// IMEI, or null. IMEI is the ONLY duplicate key — the model is returned just
+// so the warning can identify the existing entry (many phones share a model).
+async function findDuplicateOutsidePickup(imei) {
+    const target = String(imei || '').trim();
+    if (!target) return null;
+    const snap = await db.ref('outside_pickups').once('value');
+    const all = snap.val() || {};
+    const id = Object.keys(all).find(k => {
+        const rec = all[k];
+        if (!rec) return false;
+        if ((rec.status || 'pending') === 'rejected') return false; // rejected = can be re-entered
+        return String(rec.imei || '').trim() === target;
+    });
+    if (!id) return null;
+    const rec = all[id] || {};
+    return {
+        pickupId: id,
+        phoneModel: rec.phoneModel || '',
+        status: rec.status || 'pending',
+        rider: rec.rider || rec.agentName || rec.agent || '',
+        date: rec.date || rec.timestampIST || ''
+    };
+}
+
 // ---- ID Reservation (transactional — guarantees uniqueness) ----
 async function reserveOutsidePickupId() {
-    const now = new Date();
-    const yy = String(now.getFullYear()).slice(-2);
-    const mm = String(now.getMonth() + 1).padStart(2, '0');
-    const dd = String(now.getDate()).padStart(2, '0');
-    const dateKey = `${yy}${mm}${dd}`;
-
+    const dateKey = getOutsidePickupDateKey();
     const counterRef = db.ref('outside_pickup_counters/' + dateKey);
 
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -1754,7 +1844,7 @@ async function openOutsidePickup() {
     document.getElementById('outsidePickupPage').style.display = 'block';
     window.scrollTo({ top: 0, behavior: 'smooth' });
 
-    // Set placeholder ID, then reserve
+    // Placeholder while the preview loads
     const idEl = document.getElementById('outsidePickupIdDisplay');
     if (idEl) idEl.textContent = '⏳ Generating…';
 
@@ -1778,19 +1868,15 @@ async function openOutsidePickup() {
     updateOutsideSpecUI();
     lucide.createIcons();
 
-    // Reserve ID
+    // Preview the next ID (read-only). The number is only consumed when a
+    // pickup is successfully created, so refresh / reopen keeps it stable.
     try {
-        const id = await reserveOutsidePickupId();
-        outsidePickupId = id;
-        if (idEl) idEl.textContent = id;
+        outsidePickupId = await peekOutsidePickupId();
+        if (idEl) idEl.textContent = outsidePickupId;
     } catch (e) {
-        console.error('ID generation failed:', e);
-        if (idEl) idEl.textContent = '❌ Failed — Go back and retry';
-        Swal.fire({
-            icon: 'error', title: 'ID Generation Failed',
-            text: 'Could not reserve a unique ID. Please check network and try again.',
-            confirmButtonColor: '#dc2626'
-        });
+        console.warn('ID preview failed:', e);
+        outsidePickupId = '';
+        if (idEl) idEl.textContent = 'Auto-generated on submit';
     }
 }
 
@@ -1887,10 +1973,6 @@ function escapeHtmlOP(s) {
 
 async function reviewOutsidePickup() {
     if (!currentUser) { showToast('Please login first', 'error'); return; }
-    if (!outsidePickupId) {
-        Swal.fire({ icon: 'error', title: 'ID Not Ready', text: 'Pickup ID is not ready yet. Please go back and reopen.', confirmButtonColor: '#dc2626' });
-        return;
-    }
 
     const phoneModel = (document.getElementById('opPhoneModel').value || '').trim();
     const imei = (document.getElementById('opImei').value || '').trim();
@@ -1915,7 +1997,7 @@ async function reviewOutsidePickup() {
         <div style="text-align:left;font-size:13px;line-height:1.6;">
             <div style="background:linear-gradient(135deg,#faf5ff,#f3e8ff);border:1px solid #d8b4fe;border-radius:12px;padding:10px 12px;margin-bottom:10px;text-align:center;">
                 <div style="font-size:9px;font-weight:800;color:#7c3aed;letter-spacing:1.5px;">PICKUP ID</div>
-                <div style="font-family:monospace;font-size:14px;font-weight:800;color:#4c1d95;margin-top:2px;">${escapeHtmlOP(outsidePickupId)}</div>
+                <div style="font-family:monospace;font-size:14px;font-weight:800;color:#4c1d95;margin-top:2px;">${escapeHtmlOP(outsidePickupId || 'Auto-generated on submit')}</div>
             </div>
             <p><strong>Model:</strong> ${escapeHtmlOP(phoneModel)}</p>
             <p><strong>IMEI:</strong> <span style="font-family:monospace;">${escapeHtmlOP(imei)}</span></p>
@@ -1947,7 +2029,7 @@ async function reviewOutsidePickup() {
 
 async function submitOutsidePickup() {
     if (!currentUser) { showToast('Please login first', 'error'); return; }
-    if (!outsidePickupId) { showToast('Pickup ID missing. Reopen form.', 'error'); return; }
+    if (opSubmitInFlight) { showToast('Submission already in progress…', 'info'); return; }
 
     const phoneModel = (document.getElementById('opPhoneModel').value || '').trim();
     const imei = (document.getElementById('opImei').value || '').trim();
@@ -1956,27 +2038,69 @@ async function submitOutsidePickup() {
     const aadhaarNumber = (document.getElementById('opAadhaarNumber').value || '').trim();
     const billNumber = (document.getElementById('opBillNumber').value || '').trim();
 
-    const pickupId = outsidePickupId;
+    if (!imei) { showToast('IMEI missing. Please re-enter.', 'error'); return; }
+
+    opSubmitInFlight = true;
+    let reservedId = '';
+    let recordSaved = false;
+    let claimHeld = false;
 
     try {
-        // Defensive: verify ID doesn't already exist
-        const existingSnap = await db.ref('outside_pickups/' + pickupId).once('value');
-        if (existingSnap.exists()) {
-            // Shouldn't happen with transaction counter, but handle gracefully
-            showToast('⚠️ Pickup ID collision. Regenerating...', 'error');
-            outsidePickupId = await reserveOutsidePickupId();
-            document.getElementById('outsidePickupIdDisplay').textContent = outsidePickupId;
+        // ---- 1) Only one submission per phone at a time (atomic, auto-expiring) ----
+        const claim = await acquireOutsidePickupClaim(imei);
+        claimHeld = claim.held;
+        if (claim.supported && !claim.held) {
+            Swal.fire({
+                icon: 'info',
+                title: 'Already Submitting',
+                html: 'This phone is being submitted right now.<br><span style="font-size:12px;color:#6b7280;">Please wait a few seconds, then check the pickup list.</span>',
+                confirmButtonColor: '#7c3aed'
+            });
             return;
         }
 
-        // Upload photos to Firebase Storage
+        // ---- 2) Reject repeats of a phone that is already pending / approved ----
+        // IMEI is the unique key. Same model alone is NOT a duplicate.
+        const duplicate = await findDuplicateOutsidePickup(imei);
+        if (duplicate) {
+            const dupModel = duplicate.phoneModel || '—';
+            const statusLabel = duplicate.status === 'approved' ? 'Approved (in inventory)' : 'Pending Approval';
+            const modelNote = (phoneModel && duplicate.phoneModel &&
+                phoneModel.toLowerCase() !== dupModel.toLowerCase())
+                ? `<div style="margin-top:4px;">New entry model: <b>${escapeHtmlOP(phoneModel)}</b> <span style="color:#b91c1c;">(different from above)</span></div>`
+                : '';
+            Swal.fire({
+                icon: 'warning',
+                title: 'Duplicate Entry: This IMEI number already exists.',
+                html: `
+                    <div style="text-align:left;font-size:13px;line-height:1.75;">
+                        <div>IMEI: <b style="font-family:monospace;">${escapeHtmlOP(imei)}</b></div>
+                        <div>Existing Model: <b>${escapeHtmlOP(dupModel)}</b></div>
+                        <div>Existing Pickup ID: <b style="font-family:monospace;">${escapeHtmlOP(duplicate.pickupId)}</b></div>
+                        <div>Status: <b>${escapeHtmlOP(statusLabel)}</b></div>
+                        ${duplicate.rider ? `<div>Rider: <b>${escapeHtmlOP(duplicate.rider)}</b></div>` : ''}
+                        ${duplicate.date ? `<div style="color:#6b7280;">Date: ${escapeHtmlOP(duplicate.date)}</div>` : ''}
+                        ${modelNote}
+                        <div style="margin-top:10px;padding:9px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;font-size:11.5px;color:#991b1b;">
+                            This entry was NOT saved. The same IMEI cannot be added twice.
+                        </div>
+                    </div>`,
+                confirmButtonText: 'OK',
+                confirmButtonColor: '#dc2626',
+                width: 'min(460px, 94vw)'
+            });
+            return;
+        }
+
+        // ---- 3) Upload photos first, so a failed upload never burns a number ----
         Swal.fire({ title: outsidePickupImages.length ? 'Uploading photos...' : 'Saving pickup...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
         const photoUrls = [];
+        const uploadToken = `${currentUser.username}_${Date.now()}`;
         for (let i = 0; i < outsidePickupImages.length; i++) {
             try {
                 const blob = await (await fetch(outsidePickupImages[i])).blob();
-                const fileName = `${pickupId}_${i}_${Date.now()}.jpg`;
-                const storageRef = storage.ref(`outside_pickup_docs/${pickupId}/${fileName}`);
+                const fileName = `${i}_${Date.now()}.jpg`;
+                const storageRef = storage.ref(`outside_pickup_docs/pending/${uploadToken}/${fileName}`);
                 const snapshot = await storageRef.put(blob, { contentType: 'image/jpeg' });
                 photoUrls.push(await snapshot.ref.getDownloadURL());
             } catch (e) {
@@ -1987,34 +2111,61 @@ async function submitOutsidePickup() {
             }
         }
 
+        // ---- 4) Reserve the number only now, then write atomically ----
         const now = new Date();
         const istDateTime = getISTDateTime();
 
-        const record = {
-            pickupId,
-            status: 'pending',
-            rider: 'Parvameer',
-            agent: currentUser.username,
-            agentName: currentUser.name || currentUser.username,
-            phoneModel,
-            imei,
-            value,
-            ram: opSelectedRam,
-            storage: opSelectedStorage,
-            ramStorage: opSelectedRam + '/' + opSelectedStorage,
-            networkType: opSelectedNetwork,
-            customerName: customerName || '',
-            aadhaarNumber: aadhaarNumber || '',
-            billNumber: billNumber || '',
-            phoneImages: photoUrls,
-            createdAt: Date.now(),
-            timestamp: now.toISOString(),
-            timestampIST: istDateTime,
-            date: now.toLocaleDateString('en-IN'),
-            inventoryCreated: false
-        };
+        for (let attempt = 0; attempt < 2 && !recordSaved; attempt++) {
+            reservedId = await reserveOutsidePickupId();
+            outsidePickupId = reservedId;
+            const idEl = document.getElementById('outsidePickupIdDisplay');
+            if (idEl) idEl.textContent = reservedId;
 
-        await db.ref('outside_pickups/' + pickupId).set(record);
+            const record = {
+                pickupId: reservedId,
+                status: 'pending',
+                // Rider = logged-in user (same person as agent). Never hardcode.
+                rider: currentUser.name || currentUser.username,
+                agent: currentUser.username,
+                agentName: currentUser.name || currentUser.username,
+                phoneModel,
+                imei,
+                value,
+                ram: opSelectedRam,
+                storage: opSelectedStorage,
+                ramStorage: opSelectedRam + '/' + opSelectedStorage,
+                networkType: opSelectedNetwork,
+                customerName: customerName || '',
+                aadhaarNumber: aadhaarNumber || '',
+                billNumber: billNumber || '',
+                phoneImages: photoUrls,
+                createdAt: Date.now(),
+                timestamp: now.toISOString(),
+                timestampIST: istDateTime,
+                date: now.toLocaleDateString('en-IN'),
+                inventoryCreated: false
+            };
+
+            // Atomic create: abort if this key already has a record (no overwrite,
+            // so a repeated request can never create/edit a second entry).
+            const write = await db.ref('outside_pickups/' + reservedId).transaction(current => {
+                if (current !== null) return; // abort — ID already used
+                return record;
+            }, undefined, false);
+
+            if (write.committed) {
+                recordSaved = true;
+            } else {
+                // ID already occupied (counter desync). Do NOT roll the counter
+                // back — that number genuinely belongs to the existing record.
+                // Just take the next number.
+                reservedId = '';
+            }
+        }
+
+        if (!recordSaved) throw new Error('ID collision — could not save pickup');
+
+        const pickupId = reservedId;
         Swal.close();
 
         // Success modal
@@ -2051,7 +2202,17 @@ async function submitOutsidePickup() {
     } catch (e) {
         console.error('Outside pickup submit error:', e);
         Swal.close();
+        if (!recordSaved && reservedId) await releaseOutsidePickupCounter(reservedId);
+        // Keep the on-screen number in sync with the real counter after a failure.
+        try {
+            outsidePickupId = await peekOutsidePickupId();
+            const idEl = document.getElementById('outsidePickupIdDisplay');
+            if (idEl) idEl.textContent = outsidePickupId;
+        } catch (_) {}
         showToast('❌ Submit failed. Please try again.', 'error');
+    } finally {
+        if (claimHeld) await releaseOutsidePickupClaim(imei);
+        opSubmitInFlight = false;
     }
 }
 
