@@ -521,6 +521,21 @@ function updateAttendanceUI(status) {
     }
 }
 
+async function refreshAttendanceBadge() {
+    if (!currentUser || currentUser.role === 'admin') return;
+    const today = getLocalDate();
+    try {
+        const snap = await db.ref('attendance/' + currentUser.username + '/' + today).once('value');
+        const att = snap.val() || {};
+        let status = 'unmarked';
+        if (att.status === 'present') status = 'present';
+        else if (att.status === 'absent') status = 'blocked';
+        updateAttendanceUI(status);
+    } catch (e) {
+        console.warn('Attendance badge refresh failed:', e);
+    }
+}
+
 async function openAttendanceOtpModal() {
     const today = getLocalDate();
     const attSnap = await db.ref('attendance/' + currentUser.username + '/' + today).once('value');
@@ -770,7 +785,7 @@ function switchTab(tab) {
     document.querySelectorAll('.tab-content').forEach(el => el.style.display = 'none');
     document.getElementById('tab-' + tab).style.display = 'block';
     if (tab === 'pending') loadPendingOrders();
-    if (tab === 'attendance') { loadAttendanceHistory(); updateAttendanceUI(); }
+    if (tab === 'attendance') { loadAttendanceHistory(); refreshAttendanceBadge(); }
 }
 
 // === SECTION 11: OFFLINE DETECTION ===
@@ -1837,8 +1852,8 @@ async function releaseOutsidePickupCounter(pickupId) {
 // (returns supported:false) instead of breaking the submit flow.
 async function acquireOutsidePickupClaim(imei) {
     try {
-        const nowTs = Date.now();
         const result = await db.ref('outside_pickup_claims/' + imei).transaction(current => {
+            const nowTs = Date.now(); // Capture fresh timestamp on each transaction retry
             if (current && typeof current === 'object') {
                 const ts = Number(current.ts) || 0;
                 if (nowTs - ts < OP_CLAIM_TTL_MS) return; // abort — submission already running
@@ -2213,6 +2228,35 @@ async function submitOutsidePickup() {
                 showToast('❌ Photo upload failed. Try again.', 'error');
                 return;
             }
+        }
+
+        // ---- 4.5) 🆕 Final duplicate re-check (Fix B) ----
+        // Photo upload can take >90s and let the claim expire. Re-verify
+        // IMEI right before write so a concurrent submission that slipped
+        // through the step-2 check cannot create a duplicate.
+        const finalDup = await findDuplicateImei(imei);
+        if (finalDup) {
+            Swal.close();
+            const dupModel = finalDup.item?.phoneModel || '—';
+            const statusLabel = finalDup.source === 'pickups' ? 'In Inventory' : 'Pending Approval';
+            Swal.fire({
+                icon: 'warning',
+                title: 'Duplicate Entry: This IMEI number already exists.',
+                html: `
+                    <div style="text-align:left;font-size:13px;line-height:1.75;">
+                        <div>IMEI: <b style="font-family:monospace;">${escapeHtmlOP(imei)}</b></div>
+                        <div>Existing Model: <b>${escapeHtmlOP(dupModel)}</b></div>
+                        <div>Existing Order ID: <b style="font-family:monospace;">${escapeHtmlOP(finalDup.orderId)}</b></div>
+                        <div>Status: <b>${escapeHtmlOP(statusLabel)}</b></div>
+                        <div style="margin-top:10px;padding:9px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;font-size:11.5px;color:#991b1b;">
+                            This entry was NOT saved. The same IMEI cannot be added twice.
+                        </div>
+                    </div>`,
+                confirmButtonText: 'OK',
+                confirmButtonColor: '#dc2626',
+                width: 'min(460px, 94vw)'
+            });
+            return;
         }
 
         // ---- 4) Reserve the number only now, then write atomically ----
