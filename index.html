@@ -1944,20 +1944,20 @@
             if (typeof window.submitData === 'function' && !window.__fkPickupHooked) {
                 window.__fkPickupHooked = true;
                 const orig = window.submitData;
-                window.submitData = function () {
+                window.submitData = async function () {
                     const wasPickup = isPickupContext();
                     const capturedOrderId = (document.getElementById('orderId')?.value || '').trim();
                     const capturedDetails = wasPickup ? scrapeFormDetails() : null;
                     let result;
-                    try { result = orig.apply(this, arguments); }
+                    try { result = await orig.apply(this, arguments); }
                     catch (err) { throw err; }
-                    if (wasPickup) {
+                    if (wasPickup && result === true) {
                         setTimeout(function () {
                             showPickupCompletion({
                                 orderId: capturedOrderId,
                                 details: capturedDetails
                             });
-                        }, 900);
+                        }, 400);
                     }
                     return result;
                 };

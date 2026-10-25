@@ -40,6 +40,44 @@ let isOcrScanning = false;
 let ocrAttemptCount = 0;
 let lastDetectedImei = '';
 
+// === IMEI DUPLICATE CHECK HELPERS ===
+function normalizeImei(value) {
+    return String(value ?? '').replace(/\s+/g, '').trim();
+}
+
+async function findDuplicateImei(imei, excludeOrderId = null) {
+    const normalized = normalizeImei(imei);
+    if (!normalized) return null;
+
+    const [pickupsSnap, outsideSnap] = await Promise.all([
+        db.ref('pickups').once('value'),
+        db.ref('outside_pickups').once('value')
+    ]);
+
+    const pickups = pickupsSnap.val() || {};
+    for (const [orderId, item] of Object.entries(pickups)) {
+        if (excludeOrderId && String(orderId) === String(excludeOrderId)) continue;
+        if (!item || typeof item !== 'object') continue;
+        if ((item.status || '').toLowerCase() !== 'pickup') continue;
+        if (normalizeImei(item.imei) === normalized) {
+            return { source: 'pickups', orderId, item };
+        }
+    }
+
+    const outsidePickups = outsideSnap.val() || {};
+    for (const [orderId, item] of Object.entries(outsidePickups)) {
+        if (excludeOrderId && String(orderId) === String(excludeOrderId)) continue;
+        if (!item || typeof item !== 'object') continue;
+        const status = String(item.status || 'pending').toLowerCase();
+        if (status === 'rejected') continue;
+        if (normalizeImei(item.imei) === normalized) {
+            return { source: 'outside_pickups', orderId, item };
+        }
+    }
+
+    return null;
+}
+
 // ========== SPEC (RAM / STORAGE / NETWORK) STATE ==========
 let selectedRam = '';
 let selectedStorage = '';
@@ -512,6 +550,10 @@ async function openAttendanceOtpModal() {
             Swal.fire({ icon: 'error', title: 'Incorrect OTP', text: "The OTP entered is incorrect. Ask Admin for today's OTP." });
         } else if (e.message === 'OTP_USED') {
             Swal.fire({ icon: 'error', title: 'OTP Already Used', text: 'This OTP has already been used.' });
+        } else if (e.message === 'OTP_EXPIRED_DATE') {
+            Swal.fire({ icon: 'error', title: 'OTP Expired', text: 'This OTP is not valid for today. Ask Admin for today\'s OTP.' });
+        } else if (e.message === 'OTP_EXPIRED') {
+            Swal.fire({ icon: 'error', title: 'OTP Expired', text: 'This OTP has expired. Ask Admin for a new OTP.' });
         } else {
             console.error('Error verifying attendance OTP:', e);
             showToast('Verification failed. Check network.', 'error');
@@ -533,6 +575,17 @@ async function markAttendanceWithOtp(otp) {
     }
     if (!otpData || String(otpData.otp).trim() !== trimmedOtp) throw new Error('INCORRECT_OTP');
     if (otpData.used === true) throw new Error('OTP_USED');
+
+    const otpDate = String(otpData.valid_date || otpData.date || '').trim();
+    if (otpDate && otpDate !== today) throw new Error('OTP_EXPIRED_DATE');
+
+    const expiryRaw = otpData.expires_at ?? otpData.expiresAt;
+    if (expiryRaw !== undefined && expiryRaw !== null) {
+        const expiryMs = typeof expiryRaw === 'number' ? expiryRaw : new Date(expiryRaw).getTime();
+        if (Number.isFinite(expiryMs) && Date.now() > expiryMs) {
+            throw new Error('OTP_EXPIRED');
+        }
+    }
 
     await db.ref('attendance/' + currentUser.username + '/' + today).set({
         status: 'present', timestamp: Date.now(), otp_used: trimmedOtp,
@@ -569,12 +622,15 @@ function showAttendanceOtpGate() {
         input: 'text',
         inputPlaceholder: '6-digit OTP',
         inputAttributes: { maxlength: 6, inputmode: 'numeric', autocomplete: 'one-time-code' },
-        confirmButtonText: 'Verify & Continue',
+        confirmButtonText: '✅ Verify Present (OTP)',
+        denyButtonText: '❌ Mark Absent',
+        showDenyButton: true,
+        showCancelButton: false,
         confirmButtonColor: '#059669',
+        denyButtonColor: '#dc2626',
         allowOutsideClick: false,
         allowEscapeKey: false,
         allowEnterKey: true,
-        showCancelButton: false,
         preConfirm: async otp => {
             try {
                 await markAttendanceWithOtp(otp);
@@ -583,7 +639,9 @@ function showAttendanceOtpGate() {
                 const messages = {
                     INVALID_OTP: 'Please enter a valid 6-digit OTP.',
                     INCORRECT_OTP: "Incorrect OTP. Ask Admin for today's OTP.",
-                    OTP_USED: 'This OTP has already been used.'
+                    OTP_USED: 'This OTP has already been used.',
+                    OTP_EXPIRED_DATE: 'This OTP is not valid for today. Ask Admin for today\'s OTP.',
+                    OTP_EXPIRED: 'This OTP has expired. Ask Admin for a new OTP.'
                 };
                 if (!messages[e.message]) {
                     console.error('Attendance OTP verification failed:', e);
@@ -601,6 +659,10 @@ function showAttendanceOtpGate() {
             updateAttendanceUI('present');
             loadAttendanceHistory();
             loadAgentSalarySummary();
+            return;
+        }
+        if (result.isDenied) {
+            handleMarkAbsent();
             return;
         }
         if (currentUser) showAttendanceOtpGate();
@@ -1055,10 +1117,10 @@ function showForm(status) {
 
 // === SECTION 16: SUBMIT DATA (REGULAR PICKUP — UNCHANGED) ===
 async function submitData() {
-    if (!currentUser) { showToast('Please login first', 'error'); return; }
+    if (!currentUser) { showToast('Please login first', 'error'); return false; }
     if (currentUser.role !== 'admin') {
         const userSnap = await db.ref('users/' + currentUser.username + '/is_blocked').once('value');
-        if (userSnap.val() === true) { showToast('🔒 You are blocked for today!', 'error'); return; }
+        if (userSnap.val() === true) { showToast('🔒 You are blocked for today!', 'error'); return false; }
     }
     const orderId = document.getElementById('orderId').value.trim().toUpperCase();
     let existingData = null, exists = false;
@@ -1069,7 +1131,7 @@ async function submitData() {
     } catch (e) {
         console.error(e);
         showToast('Error checking order', 'error');
-        return;
+        return false;
     }
     if (exists && existingData.status === 'rejected' && currentStatus === 'pickup') {
         const { value: password, isConfirmed } = await Swal.fire({
@@ -1086,16 +1148,16 @@ async function submitData() {
             allowOutsideClick: false,
             preConfirm: (input) => { if (!input) { Swal.showValidationMessage('Enter password'); return false; } return input; }
         });
-        if (!isConfirmed) { showToast('Cancelled', 'error'); return; }
+        if (!isConfirmed) { showToast('Cancelled', 'error'); return false; }
         if (password !== 'admin123') {
             Swal.fire({ icon: 'error', title: 'Wrong Password', text: 'Invalid admin password.', confirmButtonColor: '#dc2626' });
-            return;
+            return false;
         }
         showToast('✅ Password verified!', 'success');
     }
     if (exists && existingData.status === 'pickup' && currentStatus === 'pickup') {
         Swal.fire({ icon: 'error', title: 'Already Pickup Completed', text: `Order ${orderId} already marked.`, confirmButtonColor: '#3b82f6' });
-        return;
+        return false;
     }
     const now = new Date();
     const istDateTime = getISTDateTime();
@@ -1113,13 +1175,24 @@ async function submitData() {
         const custName = document.getElementById('custName').value.trim();
         if (!phoneModel || !imei || !value) {
             Swal.fire({ icon: 'error', title: 'Missing Details', text: 'Fill Model, IMEI, Value', confirmButtonColor: '#3b82f6' });
-            return;
+            return false;
         }
         dbData.phoneModel = phoneModel;
         dbData.imei = imei;
         if (hiddenImei2) dbData.imei2 = hiddenImei2;
         dbData.value = parseInt(value);
         dbData.customerName = custName || 'N/A';
+
+        const dup = await findDuplicateImei(imei, orderId);
+        if (dup) {
+            Swal.fire({
+                icon: 'error',
+                title: 'Duplicate IMEI',
+                html: `This IMEI is already in use in <b>${dup.source === 'pickups' ? 'inventory' : 'outside pickups'}</b>.<br>Order ID: ${dup.orderId}`,
+                confirmButtonColor: '#dc2626'
+            });
+            return false;
+        }
         if (!selectedRam || !selectedStorage || !selectedNetwork) {
             const miss = [];
             if (!selectedRam) miss.push('RAM');
@@ -1132,7 +1205,7 @@ async function submitData() {
             });
             const box = document.getElementById('specSummary');
             if (box) box.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            return;
+            return false;
         }
         dbData.ram = selectedRam;
         dbData.storage = selectedStorage;
@@ -1156,7 +1229,7 @@ async function submitData() {
                     console.error('Bill image upload failed:', e);
                     Swal.close();
                     showToast('❌ Bill image upload failed', 'error');
-                    return;
+                    return false;
                 }
             }
             dbData.billImages = billUrls;
@@ -1177,7 +1250,7 @@ async function submitData() {
                     console.error('Aadhaar image upload failed:', e);
                     Swal.close();
                     showToast('❌ Aadhaar image upload failed', 'error');
-                    return;
+                    return false;
                 }
             }
             dbData.aadhaarImages = aadhaarUrls;
@@ -1189,7 +1262,7 @@ async function submitData() {
         const phoneModel = document.getElementById('phoneModelRejectReschedule').value.trim();
         if (!phoneModel) {
             Swal.fire({ icon: 'error', title: 'Missing Model', text: 'Enter phone model', confirmButtonColor: '#3b82f6' });
-            return;
+            return false;
         }
         dbData.phoneModel = phoneModel;
         let reason = selectedReason;
@@ -1197,12 +1270,12 @@ async function submitData() {
             reason = document.getElementById('otherReason').value.trim();
             if (!reason) {
                 Swal.fire({ icon: 'warning', title: 'Reason Required', text: 'Type the reason', confirmButtonColor: '#3b82f6' });
-                return;
+                return false;
             }
         }
         if (!reason) {
             Swal.fire({ icon: 'warning', title: 'Select Reason', text: 'Choose a reason', confirmButtonColor: '#3b82f6' });
-            return;
+            return false;
         }
         dbData.reason = reason;
         if (currentStatus === 'rejected') {
@@ -1225,7 +1298,7 @@ async function submitData() {
                         icon: 'question', showCancelButton: true,
                         confirmButtonColor: '#f59e0b', confirmButtonText: 'Update', cancelButtonText: 'Cancel'
                     });
-                    if (!r.isConfirmed) { showToast('Cancelled', 'error'); return; }
+                    if (!r.isConfirmed) { showToast('Cancelled', 'error'); return false; }
                 }
             }
         } catch (e) { console.error(e); }
@@ -1281,8 +1354,10 @@ async function submitData() {
         goBack();
         loadTodayStats();
         loadPendingOrders();
+        return true;
     } catch (error) {
         Swal.fire({ icon: 'error', title: 'Error', text: error.message });
+        return false;
     }
 }
 
@@ -1781,29 +1856,58 @@ function releaseOutsidePickupClaim(imei) {
     return db.ref('outside_pickup_claims/' + imei).remove().catch(() => {});
 }
 
-// Returns the existing (non-rejected) outside pickup that already uses this
-// IMEI, or null. IMEI is the ONLY duplicate key — the model is returned just
-// so the warning can identify the existing entry (many phones share a model).
+// Returns the existing (non-rejected) outside pickup or inventory pickup that
+// already uses this IMEI, or null. IMEI is the ONLY duplicate key — the model
+// is returned just so the warning can identify the existing entry (many phones
+// share a model).
 async function findDuplicateOutsidePickup(imei) {
     const target = String(imei || '').trim();
     if (!target) return null;
-    const snap = await db.ref('outside_pickups').once('value');
-    const all = snap.val() || {};
-    const id = Object.keys(all).find(k => {
-        const rec = all[k];
+
+    const [outsideSnap, pickupsSnap] = await Promise.all([
+        db.ref('outside_pickups').once('value'),
+        db.ref('pickups').once('value')
+    ]);
+
+    const outsideAll = outsideSnap.val() || {};
+    const outsideId = Object.keys(outsideAll).find(k => {
+        const rec = outsideAll[k];
         if (!rec) return false;
-        if ((rec.status || 'pending') === 'rejected') return false; // rejected = can be re-entered
+        if ((rec.status || 'pending') === 'rejected') return false;
         return String(rec.imei || '').trim() === target;
     });
-    if (!id) return null;
-    const rec = all[id] || {};
-    return {
-        pickupId: id,
-        phoneModel: rec.phoneModel || '',
-        status: rec.status || 'pending',
-        rider: rec.rider || rec.agentName || rec.agent || '',
-        date: rec.date || rec.timestampIST || ''
-    };
+    if (outsideId) {
+        const rec = outsideAll[outsideId] || {};
+        return {
+            pickupId: outsideId,
+            phoneModel: rec.phoneModel || '',
+            status: rec.status || 'pending',
+            rider: rec.rider || rec.agentName || rec.agent || '',
+            date: rec.date || rec.timestampIST || '',
+            source: 'outside_pickups'
+        };
+    }
+
+    const pickupsAll = pickupsSnap.val() || {};
+    const pickupId = Object.keys(pickupsAll).find(k => {
+        const rec = pickupsAll[k];
+        if (!rec) return false;
+        if ((rec.status || '').toLowerCase() !== 'pickup') return false;
+        return String(rec.imei || '').trim() === target;
+    });
+    if (pickupId) {
+        const rec = pickupsAll[pickupId] || {};
+        return {
+            pickupId: pickupId,
+            phoneModel: rec.phoneModel || '',
+            status: rec.status || 'pickup',
+            rider: rec.agent || '',
+            date: rec.date || rec.timestampIST || '',
+            source: 'pickups'
+        };
+    }
+
+    return null;
 }
 
 // ---- ID Reservation (transactional — guarantees uniqueness) ----
