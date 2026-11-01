@@ -1148,6 +1148,20 @@ async function submitData() {
         showToast('Error checking order', 'error');
         return false;
     }
+    if (exists && existingData) {
+        if (existingData.sold === true) {
+            Swal.fire({ icon: 'error', title: 'Already Sold', text: `Order ${orderId} is already sold and cannot be picked up again.`, confirmButtonColor: '#dc2626' });
+            return false;
+        }
+        if (existingData.returned === true) {
+            Swal.fire({ icon: 'error', title: 'Returned Order', text: `Order ${orderId} is marked returned. Ask admin to re-list it before pickup.`, confirmButtonColor: '#dc2626' });
+            return false;
+        }
+        if (existingData.status === 'on_hold') {
+            Swal.fire({ icon: 'error', title: 'Order On Hold', text: `Order ${orderId} is on hold. Ask admin to unhold it first.`, confirmButtonColor: '#dc2626' });
+            return false;
+        }
+    }
     if (exists && existingData.status === 'rejected' && currentStatus === 'pickup') {
         const { value: password, isConfirmed } = await Swal.fire({
             title: '🔐 Admin Password Required',
@@ -1188,17 +1202,27 @@ async function submitData() {
         const imei = document.getElementById('imei').value.trim();
         const value = document.getElementById('value').value.trim();
         const custName = document.getElementById('custName').value.trim();
-        if (!phoneModel || !imei || !value) {
+        const normalizedImei = normalizeImei(imei);
+        if (!phoneModel || !normalizedImei || !value) {
             Swal.fire({ icon: 'error', title: 'Missing Details', text: 'Fill Model, IMEI, Value', confirmButtonColor: '#3b82f6' });
             return false;
         }
+        if (!isValidIMEI(normalizedImei)) {
+            Swal.fire({ icon: 'error', title: 'Invalid IMEI', text: 'IMEI must be a valid 15-digit number (Luhn check failed).', confirmButtonColor: '#dc2626' });
+            return false;
+        }
+        const numericValue = Number(value);
+        if (!Number.isFinite(numericValue) || numericValue <= 0) {
+            Swal.fire({ icon: 'error', title: 'Invalid Value', text: 'Enter a valid positive purchase value.', confirmButtonColor: '#dc2626' });
+            return false;
+        }
         dbData.phoneModel = phoneModel;
-        dbData.imei = imei;
+        dbData.imei = normalizedImei;
         if (hiddenImei2) dbData.imei2 = hiddenImei2;
-        dbData.value = parseInt(value);
+        dbData.value = Math.round(numericValue);
         dbData.customerName = custName || 'N/A';
 
-        const dup = await findDuplicateImei(imei, orderId);
+        const dup = await findDuplicateImei(normalizedImei, orderId);
         if (dup) {
             Swal.fire({
                 icon: 'error',
